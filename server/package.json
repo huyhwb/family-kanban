@@ -1,0 +1,19 @@
+{
+  "name": "family-kanban-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "家庭看板后端：Express + SQLite",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.13",
+    "express": "^5.2.0",
+    "multer": "^2.0.2",
+    "node-cron": "^3.0.3"
+  }
+}

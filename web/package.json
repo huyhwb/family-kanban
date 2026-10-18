@@ -1,0 +1,22 @@
+{
+  "name": "family-kanban-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "家庭看板前端：Vue 3 + Vite + Pinia",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "dayjs": "^1.11.13",
+    "lunar-javascript": "^1.6.12",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "vite": "^7.1.11"
+  }
+}

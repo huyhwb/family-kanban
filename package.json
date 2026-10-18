@@ -1,0 +1,19 @@
+{
+  "name": "family-kanban",
+  "version": "0.1.0",
+  "private": true,
+  "description": "家庭看板 — 部署于家庭内网的常驻信息面板（日历 / 待办 / 成员 / 提醒）",
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix web install",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev:server\" \"npm run dev:web\"",
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix server start",
+    "serve": "npm run build && npm run start",
+    "pack": "node scripts/pack-nas.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

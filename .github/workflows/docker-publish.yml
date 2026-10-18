@@ -1,0 +1,60 @@
+name: docker-publish
+
+# 在 GitHub 侧构建镜像并推送到 ghcr.io
+# 触发：推送到 main、打 tag、或在 Actions 页面手动运行
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # 镜像名固定为 <用户名>/family-kanban，与仓库名解耦，改仓库名不影响镜像地址
+  IMAGE_NAME: ${{ github.repository_owner }}/family-kanban
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=ref,event=tag
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 默认只出 amd64；NAS 是 ARM 时改成 linux/amd64,linux/arm64（QEMU 模拟，耗时翻倍）
+          platforms: linux/amd64
+          # CI 在境外，基础镜像用官方源更稳，别走国内镜像站
+          build-args: |
+            BASE_IMAGE=node:22-slim
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

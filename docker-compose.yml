@@ -1,0 +1,51 @@
+services:
+  kanban:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 国内网络建议在 .env 里配好，见 deploy/nas.env.example
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org/}"
+        BETTER_SQLITE3_MIRROR: "${BETTER_SQLITE3_MIRROR:-}"
+        # 默认走镜像站：实测 Docker Hub 直连（registry-1.docker.io）在国内多数宽带下不通，
+        # 想用官方源就设 BASE_IMAGE=node:22-slim
+        BASE_IMAGE: "${BASE_IMAGE:-docker.m.daocloud.io/library/node:22-slim}"
+    # 构建出来的镜像名；要推到 Docker Hub 就在 .env 里设成 huyhdk/family-kanban:latest
+    image: "${IMAGE:-family-kanban:latest}"
+    container_name: family-kanban
+    restart: unless-stopped
+    # 让 PID 1 能正确回收子进程、转发 SIGTERM（Node 官方镜像不带 init）
+    init: true
+    stop_grace_period: 15s
+
+    ports:
+      # 左边是 NAS 上的端口，被占用时在 .env 里改 KANBAN_PORT
+      - "${KANBAN_PORT:-12333}:12333"
+
+    environment:
+      # 固定时区，别改成变量：宿主可能带着奇怪的 TZ，导致提醒时刻整体偏移
+      TZ: Asia/Shanghai
+      PORT: "12333"
+      DATA_DIR: /data
+
+    volumes:
+      # 数据库与头像持久化。默认放在项目目录下的 data/，
+      # 想放别处就在 .env 里设 DATA_DIR_HOST（例如 /vol1/1000/Docker/family-kanban）
+      - "${DATA_DIR_HOST:-./data}:/data"
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:12333/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
