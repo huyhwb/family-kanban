@@ -35,7 +35,7 @@ git push -u origin main
 `family-kanban`，地址形如：
 
 ```
-ghcr.io/<用户名>/family-kanban:latest
+ghcr.io/huyhwb/family-kanban:latest
 ```
 
 ### 4. 让 NAS 能拉（二选一）
@@ -66,7 +66,7 @@ PAT 在 GitHub → Settings → Developer settings → Personal access tokens �
 ```yaml
 services:
   kanban:
-    image: ghcr.io/<用户名>/family-kanban:latest
+    image: ghcr.io/huyhwb/family-kanban:latest
     # build: 段删掉
     container_name: family-kanban
     restart: unless-stopped
