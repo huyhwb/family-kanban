@@ -39,6 +39,7 @@ const { router: statsRouter } = require('./routes/stats')
 const { router: settingsRouter } = require('./routes/settings')
 const { router: calendarRouter } = require('./routes/calendar')
 const { router: backupRouter } = require('./routes/backup')
+const { router: exportRouter } = require('./routes/export')
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -140,6 +141,7 @@ app.use('/api/stats', statsRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/calendar', calendarRouter)
 app.use('/api/backup', backupRouter)
+app.use('/api/export', exportRouter)
 
 app.use('/api', (req, res) => {
   res.status(404).json({ error: '接口不存在' })

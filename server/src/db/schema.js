@@ -134,6 +134,12 @@ const migrations = [
   -- 同一系列（如"每天提醒，共 100 天"）的其余日期行，指向第一天那行
   ALTER TABLE todo ADD COLUMN series_id TEXT;
   CREATE INDEX IF NOT EXISTS idx_todo_series ON todo(series_id, due_date);
+  `,
+
+  // v5 —— 纪念日：每年一次，可按公历或农历
+  `
+  -- solar=按公历同月同日；lunar=按农历同月同日（由 start_date 的农历日期推算）
+  ALTER TABLE reminder_rule ADD COLUMN yearly_kind TEXT NOT NULL DEFAULT 'solar';
   `
 ]
 

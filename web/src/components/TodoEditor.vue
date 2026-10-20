@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import dayjs from 'dayjs'
+import { Solar, Lunar } from 'lunar-javascript'
 import api from '../api/client'
 import { useBoardStore } from '../stores/board'
 import { avatarSrcOf } from '../lib/avatars'
@@ -28,7 +29,8 @@ const PATTERNS = [
   { key: 'daily', name: '每天' },
   { key: 'weekly', name: '每周' },
   { key: 'workdays', name: '工作日' },
-  { key: 'restdays', name: '非工作日' }
+  { key: 'restdays', name: '非工作日' },
+  { key: 'yearly', name: '纪念日' }
 ]
 
 const WEEKDAY_LABELS = [
@@ -48,6 +50,9 @@ const isEdit = computed(() => !!props.todo)
 /** 编辑的是重复任务展开出来的某一天：日期由提醒计划排定，不给手改 */
 const isSeriesDay = computed(() => !!props.todo?.seriesId)
 
+/** 当前是否在配一个纪念日（提醒必须开着，否则退回普通待办） */
+const isYearly = computed(() => form.reminderEnabled && form.pattern === 'yearly')
+
 const form = reactive({
   title: '',
   dueDate: '',
@@ -64,6 +69,7 @@ const form = reactive({
   intervalHours: 8,
   durationDays: 1,
   pattern: 'daily',
+  yearlyKind: 'solar',
   weekdays: [1, 3, 5],
   workWeek: 5
 })
@@ -113,6 +119,7 @@ function resetForm() {
   form.note = ''
   form.reminderEnabled = false
   form.pattern = 'daily'
+  form.yearlyKind = 'solar'
   form.weekdays = [1, 3, 5]
   form.workWeek = 5
   form.startTime = d.startTime
@@ -140,6 +147,7 @@ function resetForm() {
       form.intervalHours = t.reminder.intervalHours || d.intervalHours
       form.durationDays = t.reminder.durationDays || d.durationDays
       form.pattern = t.reminder.pattern || 'daily'
+      form.yearlyKind = t.reminder.yearlyKind === 'lunar' ? 'lunar' : 'solar'
       form.workWeek = Number(t.reminder.workWeek) === 6 ? 6 : 5
       const wd = Array.isArray(t.reminder.weekdays) ? t.reminder.weekdays : []
       form.weekdays = wd.length ? wd : [1, 3, 5]
@@ -225,7 +233,14 @@ function quickWeekdays(kind) {
 /** 切换重复方式：非「每天」时若持续天数还是 1 天，自动给到一个月，避免只触发一次 */
 function setPattern(key) {
   form.pattern = key
-  if (key !== 'daily' && Number(form.durationDays) < 7) form.durationDays = 30
+  if (key === 'yearly') {
+    // 纪念日一年一次：次数与持续天数没有意义，也不进四象限
+    form.timesPerDay = 1
+    form.durationDays = 1
+    form.quadrant = null
+  } else if (key !== 'daily' && Number(form.durationDays) < 7) {
+    form.durationDays = 30
+  }
   revealPreview()
 }
 
@@ -243,8 +258,55 @@ function dayMatches(d) {
   return true
 }
 
+/** 纪念日：本地按公历 / 农历各推若干年，仅取"下次"起的日期用于预览 */
+const YEARLY_PREVIEW_YEARS = 10
+
+function yearlyPreview() {
+  const base = dayjs(form.dueDate)
+  if (!base.isValid()) return []
+  const time = form.startTime || '08:00'
+  const today = dayjs().startOf('day')
+  const todayLunarYear = Solar.fromYmd(today.year(), today.month() + 1, today.date()).getLunar().getYear()
+  const out = []
+
+  if (form.yearlyKind === 'lunar') {
+    const lunar = Solar.fromYmd(base.year(), base.month() + 1, base.date()).getLunar()
+    const month = Math.abs(lunar.getMonth())
+    const day = lunar.getDay()
+    const fromYear = Math.max(lunar.getYear(), todayLunarYear - 1)
+    for (let i = 0; i < YEARLY_PREVIEW_YEARS + 2; i++) {
+      try {
+        const s = Lunar.fromYmd(fromYear + i, month, day).getSolar()
+        out.push(dayjs(`${s.toYmd()} ${time}`))
+      } catch (err) {
+        /* 该年没有这一天 */
+      }
+    }
+  } else {
+    const fromYear = Math.max(base.year(), today.year() - 1)
+    for (let i = 0; i < YEARLY_PREVIEW_YEARS + 2; i++) {
+      const y = fromYear + i
+      const dim = dayjs(`${y}-${base.month() + 1}-01`).daysInMonth()
+      out.push(dayjs(`${y}-${base.month() + 1}-${Math.min(base.date(), dim)} ${time}`))
+    }
+  }
+
+  // 只保留今天及以后的，纪念日是「不限时长」，没有末次
+  return out.filter((d) => !d.isBefore(today, 'day')).slice(0, YEARLY_PREVIEW_YEARS)
+}
+
+/** 纪念日的农历表述，用于预览文案 */
+const yearlyLunarLabel = computed(() => {
+  const base = dayjs(form.dueDate)
+  if (!base.isValid()) return ''
+  const lunar = Solar.fromYmd(base.year(), base.month() + 1, base.date()).getLunar()
+  return `${lunar.getMonthInChinese()}月${lunar.getDayInChinese()}`
+})
+
 const previewTimes = computed(() => {
   if (!form.reminderEnabled) return []
+  if (form.pattern === 'yearly') return yearlyPreview()
+
   const base = dayjs(`${form.dueDate} ${form.startTime || '08:00'}`)
   if (!base.isValid()) return []
   if (form.pattern === 'weekly' && !form.weekdays.length) return []
@@ -275,16 +337,23 @@ const patternLabel = computed(() => {
   if (form.pattern === 'restdays') {
     return form.workWeek === 6 ? '单休（每周日）' : '双休（每周六、日）'
   }
+  if (form.pattern === 'yearly') {
+    return form.yearlyKind === 'lunar' ? '每年（农历）' : '每年'
+  }
   return '每天'
 })
 
 const perDayLabel = computed(() => {
+  if (form.pattern === 'yearly') {
+    return form.yearlyKind === 'lunar' ? `农历 ${yearlyLunarLabel.value}` : '公历同月同日'
+  }
   const n = Math.max(1, Number(form.timesPerDay) || 1)
   return n === 1 ? '每天 1 次' : `每天 ${n} 次，间隔 ${Number(form.intervalHours) || 0} 小时`
 })
 
 /** 每天多次时提示「勾几次才算完成」 */
 const repeatHint = computed(() => {
+  if (form.pattern === 'yearly') return ''
   const n = Math.max(1, Number(form.timesPerDay) || 1)
   if (!form.reminderEnabled || n <= 1) return ''
   return `每天 ${n} 次 → 待办需勾选 ${n} 次才算完成`
@@ -302,12 +371,16 @@ const previewNotice = computed(() => {
 const previewHead = computed(() => {
   const list = previewTimes.value
   if (!list.length) return []
-  return list.slice(0, 6).map((t) => t.format('MM-DD HH:mm'))
+  const fmt = form.pattern === 'yearly' ? 'YYYY-MM-DD' : 'MM-DD HH:mm'
+  return list.slice(0, 6).map((t) => t.format(fmt))
 })
 
 const previewRange = computed(() => {
   const list = previewTimes.value
   if (list.length < 2) return ''
+  if (form.pattern === 'yearly') {
+    return `首次 ${list[0].format('YYYY-MM-DD')} · 末次 ${list[list.length - 1].format('YYYY-MM-DD')}`
+  }
   return `首次 ${list[0].format('MM-DD HH:mm')} · 末次 ${list[list.length - 1].format('MM-DD HH:mm')}`
 })
 
@@ -352,10 +425,11 @@ async function submit() {
       ? {
           startDate: isSeriesDay.value ? form.reminderStartDate || form.dueDate : form.dueDate,
           startTime: form.startTime,
-          timesPerDay: Number(form.timesPerDay) || 1,
+          timesPerDay: form.pattern === 'yearly' ? 1 : Number(form.timesPerDay) || 1,
           intervalHours: Number(form.intervalHours) || 8,
-          durationDays: Number(form.durationDays) || 1,
+          durationDays: form.pattern === 'yearly' ? 1 : Number(form.durationDays) || 1,
           pattern: form.pattern,
+          yearlyKind: form.pattern === 'yearly' ? form.yearlyKind : 'solar',
           weekdays: form.pattern === 'weekly' ? [...form.weekdays] : [],
           workWeek: Number(form.workWeek) === 6 ? 6 : 5,
           enabled: true
@@ -475,7 +549,7 @@ const members = computed(() => board.members)
               </div>
             </div>
 
-            <div class="ed__field">
+            <div v-if="!isYearly" class="ed__field">
               <span class="ed__label">象限</span>
               <div class="ed__chips">
                 <button
@@ -492,6 +566,10 @@ const members = computed(() => board.members)
                 </button>
               </div>
             </div>
+
+            <p v-else class="ed__field">
+              <span class="ed__label-hint">纪念日归入「未分类」，不占用四象限</span>
+            </p>
 
             <label class="ed__field">
               <span class="ed__label">备注（选填）</span>
@@ -524,6 +602,30 @@ const members = computed(() => board.members)
                       {{ p.name }}
                     </button>
                   </div>
+                </div>
+
+                <!-- 纪念日：公历 / 农历 -->
+                <div v-if="form.pattern === 'yearly'" class="ed__field">
+                  <span class="ed__label">按哪种日期</span>
+                  <div class="ed__chips">
+                    <button
+                      class="chip"
+                      :class="{ 'chip--active': form.yearlyKind === 'solar' }"
+                      @click="form.yearlyKind = 'solar'"
+                    >
+                      公历 · 每年 {{ dayjs(form.dueDate).format('M月D日') }}
+                    </button>
+                    <button
+                      class="chip"
+                      :class="{ 'chip--active': form.yearlyKind === 'lunar' }"
+                      @click="form.yearlyKind = 'lunar'"
+                    >
+                      农历 · 每年 {{ yearlyLunarLabel }}
+                    </button>
+                  </div>
+                  <span class="ed__label-hint">
+                    选农历时按农历同月同日推算，公历日期每年会变（如春节、生日）
+                  </span>
                 </div>
 
                 <!-- 每周：星期多选 -->
@@ -578,11 +680,11 @@ const members = computed(() => board.members)
                     <span class="ed__label">几点开始</span>
                     <input v-model="form.startTime" type="time" class="field" />
                   </label>
-                  <label class="ed__field">
+                  <label v-if="form.pattern !== 'yearly'" class="ed__field">
                     <span class="ed__label">每天几次</span>
                     <input v-model.number="form.timesPerDay" type="number" min="1" max="24" class="field" />
                   </label>
-                  <label class="ed__field">
+                  <label v-if="form.pattern !== 'yearly'" class="ed__field">
                     <span class="ed__label">间隔小时</span>
                     <input
                       v-model.number="form.intervalHours"
@@ -596,7 +698,7 @@ const members = computed(() => board.members)
                 </div>
 
                 <!-- 持续天数 -->
-                <div class="ed__field">
+                <div v-if="form.pattern !== 'yearly'" class="ed__field">
                   <div class="ed__label-row">
                     <span class="ed__label">持续天数</span>
                     <span class="ed__label-hint ed__quick">
@@ -625,11 +727,16 @@ const members = computed(() => board.members)
                   <p v-if="previewNotice" class="ed__preview-notice">{{ previewNotice }}</p>
                   <template v-else>
                     <div class="ed__preview-head">
-                      <span class="ed__preview-total">共 {{ previewTimes.length }} 次</span>
+                      <span class="ed__preview-total">
+                        {{ form.pattern === 'yearly' ? '不限时长' : `共 ${previewTimes.length} 次` }}
+                      </span>
                       <span class="ed__preview-tag">{{ patternLabel }}</span>
                       <span class="ed__preview-tag">{{ perDayLabel }}</span>
                     </div>
-                    <p class="ed__preview-range">从 {{ form.dueDate }} 起持续 {{ form.durationDays }} 天 · {{ previewRange }}</p>
+                    <p v-if="form.pattern === 'yearly'" class="ed__preview-range">
+                      下次 {{ previewTimes[0] ? previewTimes[0].format('YYYY-MM-DD') : '—' }} · 此后每年重复，无终止
+                    </p>
+                    <p v-else class="ed__preview-range">从 {{ form.dueDate }} 起持续 {{ form.durationDays }} 天 · {{ previewRange }}</p>
                     <p v-if="repeatHint" class="ed__preview-range">{{ repeatHint }}</p>
                     <p class="ed__preview-list">
                       {{ previewHead.join('、') }}

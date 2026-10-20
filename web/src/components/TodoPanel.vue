@@ -19,6 +19,22 @@ const QUADRANTS = [
 ]
 
 const pendingDelete = ref(null)
+const exportOpen = ref(false)
+
+/** 导出到手机/平板日历的时间范围 */
+const EXPORT_SCOPES = [
+  { key: '1d', name: '1 天', hint: '仅今天' },
+  { key: '3d', name: '3 天', hint: '今天起 3 天' },
+  { key: '7d', name: '7 天', hint: '一周' },
+  { key: '1m', name: '1 个月', hint: '30 天' },
+  { key: 'all', name: '全部', hint: '所有未完成' }
+]
+
+function doExport(scope) {
+  exportOpen.value = false
+  // 直接跳转下载：iOS 会弹出「加入日历」，Android 用日历 App 打开即可
+  window.location.href = `/api/export/ics?scope=${encodeURIComponent(scope)}`
+}
 const deleteOpen = computed({
   get: () => !!pendingDelete.value,
   set: (v) => {
@@ -115,6 +131,14 @@ function clearFilters() {
           清单
         </button>
       </div>
+
+      <button class="td__export" title="添加到手机 / 平板日历" @click="exportOpen = true">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1.8" y="3" width="12.4" height="11.2" rx="2" stroke="currentColor" stroke-width="1.3" />
+          <path d="M1.8 6.4h12.4M5.2 1.8v2.6M10.8 1.8v2.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          <path d="M8 8.6v3.4M6.3 10.3h3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+        </svg>
+      </button>
     </header>
 
     <div class="td__status">
@@ -225,6 +249,32 @@ function clearFilters() {
       @confirm="confirmDelete"
       @cancel="pendingDelete = null"
     />
+
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="exportOpen" class="xp" @click.self="exportOpen = false">
+          <div class="xp__card">
+            <h3 class="xp__title">添加到手机 / 平板日程</h3>
+            <p class="xp__desc">
+              生成一份 .ics 日历文件：iPhone / iPad 打开后点「添加到日历」，
+              安卓用系统日历或 Google 日历导入即可。选个时间范围：
+            </p>
+            <div class="xp__grid">
+              <button
+                v-for="s in EXPORT_SCOPES"
+                :key="s.key"
+                class="xp__opt"
+                @click="doExport(s.key)"
+              >
+                <span class="xp__opt-name">{{ s.name }}</span>
+                <span class="xp__opt-hint">{{ s.hint }}</span>
+              </button>
+            </div>
+            <button class="xp__cancel" @click="exportOpen = false">取消</button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </section>
 </template>
 
@@ -505,5 +555,105 @@ function clearFilters() {
 
 .td__add:active {
   transform: scale(0.99);
+}
+
+/* 导出到日历 */
+.td__export {
+  flex: none;
+  width: 1.7rem;
+  height: 1.7rem;
+  margin-left: 0.35rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  display: grid;
+  place-items: center;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.td__export:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-weak);
+}
+
+.xp {
+  position: fixed;
+  inset: 0;
+  z-index: 700;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.xp__card {
+  width: min(24rem, 100%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, 1rem);
+  box-shadow: var(--shadow-lg);
+  padding: 1.1rem 1.15rem 0.9rem;
+}
+
+.xp__title {
+  font-size: 0.98rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.xp__desc {
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--text-3);
+  margin-bottom: 0.85rem;
+}
+
+.xp__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+}
+
+.xp__opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.12rem;
+  padding: 0.55rem 0.2rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.xp__opt:hover {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+}
+
+.xp__opt-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.xp__opt-hint {
+  font-size: 0.62rem;
+  color: var(--text-3);
+}
+
+.xp__cancel {
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  border-radius: var(--r-md);
+  font-size: 0.78rem;
+  color: var(--text-3);
+}
+
+.xp__cancel:hover {
+  background: var(--panel-2);
+  color: var(--text);
 }
 </style>

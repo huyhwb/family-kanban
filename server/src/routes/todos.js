@@ -26,6 +26,8 @@ function shapeRule(row) {
     pattern: row.pattern || 'daily',
     weekdays: scheduler.parseWeekdays(row.weekdays),
     workWeek: Number(row.work_week) === 6 ? 6 : 5,
+    // 纪念日：solar=公历，lunar=农历
+    yearlyKind: row.yearly_kind === 'lunar' ? 'lunar' : 'solar',
     enabled: !!row.enabled
   }
 }
@@ -157,6 +159,14 @@ function setTodoMembers(db, todoId, memberIds) {
 /* 提醒规则                                                           */
 /* ------------------------------------------------------------------ */
 
+/** 纪念日不进四象限：规则是每年一次的，强制置为「不分类」 */
+function forceUnclassifiedIfYearly(db, todoId) {
+  const rule = db.prepare('SELECT pattern FROM reminder_rule WHERE todo_id = ? LIMIT 1;').get(todoId)
+  if (rule && rule.pattern === 'yearly') {
+    db.prepare('UPDATE todo SET quadrant = NULL WHERE id = ? AND quadrant IS NOT NULL;').run(todoId)
+  }
+}
+
 /** 把系列根的静态信息同步给其余「未完成」的天；已完成的当天保持原样 */
 function propagateSeries(db, rootId) {
   const root = db.prepare('SELECT * FROM todo WHERE id = ?;').get(rootId)
@@ -217,9 +227,9 @@ function upsertRule(db, todoId, reminder) {
     throw Object.assign(new Error('提醒规则的开始日期与开始时间格式不正确'), { status: 400 })
   }
 
-  const timesPerDay = Math.min(24, Math.max(1, asInt(reminder.timesPerDay, 1)))
+  const timesPerDayRaw = Math.min(24, Math.max(1, asInt(reminder.timesPerDay, 1)))
   const intervalHours = Math.min(24, Math.max(0.25, Number(reminder.intervalHours) || 8))
-  const durationDays = Math.min(365, Math.max(1, asInt(reminder.durationDays, 1)))
+  const durationDaysRaw = Math.min(365, Math.max(1, asInt(reminder.durationDays, 1)))
   const enabled = reminder.enabled === false ? 0 : 1
 
   const pattern = scheduler.PATTERNS.includes(reminder.pattern) ? reminder.pattern : 'daily'
@@ -229,6 +239,11 @@ function upsertRule(db, todoId, reminder) {
   }
   const weekdays = weekdayList.length ? weekdayList.join(',') : null
   const workWeek = Number(reminder.workWeek) === 6 ? 6 : 5
+  // 纪念日：一年一次，公历或农历；次数与持续天数对它没有意义
+  const yearlyKind = String(reminder.yearlyKind || '') === 'lunar' ? 'lunar' : 'solar'
+  const isYearly = pattern === 'yearly'
+  const timesPerDay = isYearly ? 1 : timesPerDayRaw
+  const durationDays = isYearly ? 1 : durationDaysRaw
 
   let ruleId
   if (existing) {
@@ -236,7 +251,8 @@ function upsertRule(db, todoId, reminder) {
     db.prepare(
       `UPDATE reminder_rule
        SET start_date = ?, start_time = ?, times_per_day = ?, interval_hours = ?,
-           duration_days = ?, enabled = ?, pattern = ?, weekdays = ?, work_week = ?
+           duration_days = ?, enabled = ?, pattern = ?, weekdays = ?, work_week = ?,
+           yearly_kind = ?
        WHERE id = ?;`
     ).run(
       startDate,
@@ -248,6 +264,7 @@ function upsertRule(db, todoId, reminder) {
       pattern,
       weekdays,
       workWeek,
+      yearlyKind,
       ruleId
     )
     // 规则参数变了，已生成但未触发的实例全部作废重建
@@ -257,8 +274,8 @@ function upsertRule(db, todoId, reminder) {
     db.prepare(
       `INSERT INTO reminder_rule
         (id, todo_id, start_date, start_time, times_per_day, interval_hours, duration_days,
-         enabled, pattern, weekdays, work_week, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+         enabled, pattern, weekdays, work_week, yearly_kind, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
     ).run(
       ruleId,
       todoId,
@@ -271,6 +288,7 @@ function upsertRule(db, todoId, reminder) {
       pattern,
       weekdays,
       workWeek,
+      yearlyKind,
       nowIso()
     )
   }
@@ -462,6 +480,8 @@ router.post('/', (req, res) => {
       )
       setTodoMembers(db, id, memberIds)
       upsertRule(db, id, body.reminder)
+      // 纪念日不参与四象限分类
+      forceUnclassifiedIfYearly(db, id)
     })
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message })
@@ -545,6 +565,7 @@ router.patch('/:id', (req, res) => {
       if (body.reminder !== undefined) {
         upsertRule(db, editId, body.reminder)
       }
+      forceUnclassifiedIfYearly(db, editId)
       if (isSeries) propagateSeries(db, editId)
     })
   } catch (err) {

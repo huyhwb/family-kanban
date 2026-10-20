@@ -23,6 +23,9 @@ export function patternLabel(rule) {
   if (pattern === 'restdays') {
     return Number(rule.workWeek) === 6 ? '单休' : '双休'
   }
+  if (pattern === 'yearly') {
+    return rule.yearlyKind === 'lunar' ? '每年（农历）' : '每年'
+  }
   return '每天'
 }
 

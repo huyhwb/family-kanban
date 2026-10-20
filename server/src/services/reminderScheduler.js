@@ -2,6 +2,7 @@
 
 const dayjs = require('dayjs')
 const cron = require('node-cron')
+const { Solar, Lunar } = require('lunar-javascript')
 const { getDb, withTx } = require('../db')
 const { uid, nowIso } = require('../lib/util')
 
@@ -9,9 +10,11 @@ const { uid, nowIso } = require('../lib/util')
 const EXPIRE_MINUTES = 120
 /** 单条规则一次最多生成多少个实例，防止参数填错时把库撑爆 */
 const MAX_INSTANCES_PER_RULE = 4000
+/** 纪念日往后生成多少年 */
+const YEARLY_YEARS = 20
 
 /** 重复方式 */
-const PATTERNS = ['daily', 'weekly', 'workdays', 'restdays']
+const PATTERNS = ['daily', 'weekly', 'workdays', 'restdays', 'yearly']
 
 const FMT = 'YYYY-MM-DDTHH:mm:ss'
 const DAY = 'YYYY-MM-DD'
@@ -66,8 +69,11 @@ function dayMatches(dateStr, rule) {
  * 计算某条规则产生的全部触发时刻。
  * 先在 [start_date, start_date + duration_days) 窗口内筛出命中的日期，
  * 再在命中日按 start_time + j × interval_hours 生成时刻。
+ * 纪念日（yearly）走单独分支：往后推 YEARLY_YEARS 年，每年一次。
  */
 function computeFireTimes(rule) {
+  if ((rule.pattern || 'daily') === 'yearly') return computeYearlyTimes(rule)
+
   const times = []
   const start = dayjs(`${rule.start_date} ${rule.start_time}`)
   if (!start.isValid()) return times
@@ -87,6 +93,76 @@ function computeFireTimes(rule) {
   return times
 }
 
+const pad2 = (n) => String(n).padStart(2, '0')
+
+/** 某年某月的第 d 天，遇到不存在的日期（如平年 2/29）收敛到当月最后一天 */
+function safeYmd(year, month, day) {
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  const dd = Math.min(day, days[month - 1])
+  return `${year}-${pad2(month)}-${pad2(dd)}`
+}
+
+/** 取某个公历日期的农历月日；闰月按正月的月份算，避免有些年份没有闰月时丢事件 */
+function lunarPartsOf(dateStr) {
+  const [y, m, d] = String(dateStr).split('-').map(Number)
+  const lunar = Solar.fromYmd(y, m, d).getLunar()
+  const rawMonth = lunar.getMonth()
+  return {
+    year: lunar.getYear(),
+    month: Math.abs(rawMonth),
+    day: lunar.getDay(),
+    isLeap: rawMonth < 0,
+    label: `${lunar.getMonthInChinese()}月${lunar.getDayInChinese()}`
+  }
+}
+
+/** 某个公历日期对应的农历表述，如「正月初一」；解析失败返回空串 */
+function lunarLabelOf(dateStr) {
+  try {
+    return lunarPartsOf(dateStr).label
+  } catch (err) {
+    return ''
+  }
+}
+
+/**
+ * 纪念日：每年一次，按公历或农历同月同日。
+ * 语义上是「不限时长」，这里只按年份滚动生成——窗口从"今年"算起，
+ * 每年重新跑一次 syncAllRules 就会把后续年份补上，永远不会到期。
+ */
+function computeYearlyTimes(rule) {
+  const out = []
+  const startDate = String(rule.start_date || '')
+  const [sy, sm, sd] = startDate.split('-').map(Number)
+  if (!sy || !sm || !sd) return out
+
+  const time = /^\d{2}:\d{2}$/.test(rule.start_time) ? rule.start_time : '08:00'
+  const lunar = String(rule.yearly_kind || 'solar') === 'lunar'
+
+  if (!lunar) {
+    const nowYear = dayjs().year()
+    const from = Math.max(sy, nowYear - 1)
+    for (let y = from; y <= nowYear + YEARLY_YEARS; y++) {
+      out.push(`${safeYmd(y, sm, sd)}T${time}:00`)
+    }
+    return out
+  }
+
+  const parts = lunarPartsOf(startDate)
+  const nowLunarYear = lunarPartsOf(dayjs().format(DAY)).year
+  const from = Math.max(parts.year, nowLunarYear - 1)
+  for (let ly = from; ly <= nowLunarYear + YEARLY_YEARS; ly++) {
+    try {
+      const solar = Lunar.fromYmd(ly, parts.month, parts.day).getSolar()
+      out.push(`${solar.toYmd()}T${time}:00`)
+    } catch (err) {
+      // 个别年份没有这一天（闰月/小月三十），跳过即可
+    }
+  }
+  return out
+}
+
 /** 只算数量，供前端预览文案使用 */
 function countFireTimes(rule) {
   return computeFireTimes(rule).length
@@ -95,6 +171,9 @@ function countFireTimes(rule) {
 /** 生成一句人话描述，前后端共用同一套口径 */
 function describePattern(rule) {
   const pattern = rule.pattern || 'daily'
+  if (pattern === 'yearly') {
+    return String(rule.yearly_kind || 'solar') === 'lunar' ? '每年（农历）' : '每年'
+  }
   if (pattern === 'weekly') {
     const days = parseWeekdays(rule.weekdays_array || rule.weekdays)
     if (!days.length) return '每天'
@@ -162,6 +241,7 @@ function materializeSeries(db, rule) {
 
   let created = 0
   const dayMap = new Map()
+  const todayStr = dayjs().format(DAY)
   for (const date of dates) {
     const row = findRow.get(rootId, date)
     if (!row) {
@@ -169,6 +249,8 @@ function materializeSeries(db, rule) {
         dayMap.set(date, rootId)
         continue // 根自己就是这一天
       }
+      // 过去的日期不再补行（纪念日会往前推 20 年，别把历史年份也刷出来）
+      if (date < todayStr) continue
       const id = uid()
       insertRow.run(
         id,
@@ -506,6 +588,7 @@ module.exports = {
   dayMatches,
   parseWeekdays,
   describePattern,
+  lunarLabelOf,
   syncRule,
   syncAllRules,
   materializeSeries,
