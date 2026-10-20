@@ -58,11 +58,11 @@ export const useReminderStore = defineStore('reminder', {
       this.promote()
     },
 
-    async handle(action) {
+    async handle(action, memberId = null) {
       const current = this.active
       if (!current) return
       try {
-        await api.reminders.handle(current.id, action)
+        await api.reminders.handle(current.id, action, memberId)
       } catch (err) {
         this.lastError = err.message
       }

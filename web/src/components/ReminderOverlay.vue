@@ -39,16 +39,22 @@ const queueText = computed(() => {
   return n > 1 ? `还有 ${n - 1} 条待处理提醒` : ''
 })
 
-async function act(action) {
+async function act(action, memberId = null) {
   if (busy.value) return
   busy.value = true
   try {
-    await reminder.handle(action)
+    await reminder.handle(action, memberId)
     board.refreshTodos()
   } finally {
     busy.value = false
   }
 }
+
+/** 多人事项：浮层里直接按人点完成 */
+const dueMembers = computed(() => {
+  const list = active.value && Array.isArray(active.value.members) ? active.value.members : []
+  return list.length > 1 ? list : []
+})
 </script>
 
 <template>
@@ -86,14 +92,36 @@ async function act(action) {
             </span>
           </div>
 
-          <div class="ro__actions">
+          <!-- 多人事项：按人分别点完成 -->
+          <div v-if="dueMembers.length" class="ro__members">
+            <p class="ro__members-tip">谁完成了？</p>
+            <div class="ro__members-row">
+              <button
+                v-for="m in dueMembers"
+                :key="m.id"
+                class="ro__member-btn"
+                :disabled="busy"
+                @click="act('done', m.id)"
+              >
+                <img :src="avatarSrcOf(m, m.avatar_preset)" alt="" />
+                <span>{{ m.name }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ro__actions" :class="{ 'ro__actions--pair': dueMembers.length }">
             <button class="ro__btn ro__btn--ghost" :disabled="busy" @click="act('skip')">
               跳过本次
             </button>
             <button class="ro__btn ro__btn--snooze" :disabled="busy" @click="act('snooze')">
               稍后提醒
             </button>
-            <button class="ro__btn ro__btn--done" :disabled="busy" @click="act('done')">
+            <button
+              v-if="!dueMembers.length"
+              class="ro__btn ro__btn--done"
+              :disabled="busy"
+              @click="act('done')"
+            >
               {{ countInfo ? `完成第 ${countInfo.next} 次` : '已完成' }}
             </button>
           </div>
@@ -224,6 +252,53 @@ async function act(action) {
   grid-template-columns: 1fr 1fr 1.2fr;
   gap: 0.55rem;
   margin-top: 1.5rem;
+}
+
+.ro__actions--pair {
+  grid-template-columns: 1fr 1fr;
+}
+
+/* 多人事项：按人点完成 */
+.ro__members {
+  margin-top: 1.1rem;
+}
+
+.ro__members-tip {
+  font-size: 0.7rem;
+  color: var(--text-3);
+  margin-bottom: 0.4rem;
+}
+
+.ro__members-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ro__member-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 0.8rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ro__member-btn img {
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.ro__member-btn:hover {
+  border-color: var(--green);
+  background: var(--green-weak);
+  color: var(--green);
 }
 
 .ro__btn {

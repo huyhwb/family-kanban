@@ -65,7 +65,7 @@ const nextReminder = computed(() => {
 
 const totalCount = computed(() => board.todos.length)
 
-function onAction(action, todo) {
+function onAction(action, todo, memberId = null) {
   if (action === 'edit') {
     openEditor(todo)
     return
@@ -75,10 +75,31 @@ function onAction(action, todo) {
     return
   }
   board
-    .setTodoStatus(todo.id, action)
+    .setTodoStatus(todo.id, action, memberId)
     .then((updated) => {
+      if (!updated) return
+      const who = memberId ? (updated.members || []).find((m) => m.id === memberId) : null
+      const name = who ? who.name : ''
+
+      if (action === 'restore') {
+        if (memberId) toastOk(`${name} 已撤销`)
+        return
+      }
+      if (action !== 'done') return
+
+      // 多人事项：按人反馈还剩几个
+      const total = Number(updated.memberTotal) || 0
+      if (total > 1) {
+        if (updated.status === 'done') {
+          toastOk(`「${updated.title}」${total} 人都已完成`)
+        } else {
+          const left = total - (Number(updated.memberDone) || 0)
+          toastOk(`${name} 已完成 · 还剩 ${left} 人`)
+        }
+        return
+      }
+
       // 重复任务：给出「第几次 / 共几次」的即时反馈
-      if (!updated || action !== 'done') return
       const target = Number(updated.targetCount) || 1
       if (target <= 1) return
       const done = Number(updated.doneCount) || 0

@@ -18,6 +18,19 @@ const root = ref(null)
 
 const isDone = computed(() => props.todo.status !== 'pending')
 
+/** 多人事项：每人各自勾选，全部完成后整条才算完成 */
+const isMultiMember = computed(() => memberList.value.length > 1)
+const memberDone = computed(() => {
+  if (!isMultiMember.value) return 0
+  return memberList.value.filter((m) => m.status === 'done' || m.status === 'skipped').length
+})
+const allMembersDone = computed(
+  () => isMultiMember.value && memberDone.value >= memberList.value.length
+)
+const memberCountText = computed(() =>
+  isMultiMember.value ? `${memberDone.value}/${memberList.value.length}` : ''
+)
+
 /** 重复任务计次：targetCount > 1 表示今天要做多次 */
 const targetCount = computed(() => Math.max(1, Number(props.todo.targetCount) || 1))
 const doneCount = computed(() => {
@@ -25,7 +38,12 @@ const doneCount = computed(() => {
   return Math.min(targetCount.value, Math.max(0, n))
 })
 const isMulti = computed(() => targetCount.value > 1)
-const isPartial = computed(() => !isDone.value && doneCount.value > 0)
+// 计次做到一半、或多人里有人已完成，都算「进行中」
+const isPartial = computed(
+  () =>
+    !isDone.value &&
+    ((isMulti.value && doneCount.value > 0) || (isMultiMember.value && memberDone.value > 0))
+)
 
 const countText = computed(() =>
   isMulti.value ? `${doneCount.value}/${targetCount.value}` : ''
@@ -84,9 +102,15 @@ function toggleMenu(e) {
   menuOpen.value = !menuOpen.value
 }
 
-function pick(action) {
+function pick(action, memberId = null) {
   menuOpen.value = false
-  emit('action', action, props.todo)
+  emit('action', action, props.todo, memberId)
+}
+
+/** 多人事项：点某人 = 那人完成；再点已完成的人 = 撤销他 */
+function toggleMember(m) {
+  const done = m.status === 'done' || m.status === 'skipped'
+  pick(done ? 'restore' : 'done', m.id)
 }
 
 function onDocClick(e) {
@@ -122,8 +146,26 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
     <Transition name="pop">
       <div v-if="menuOpen" class="todo__menu" @click.stop>
+        <!-- 多人事项：按人分别勾选 -->
+        <template v-if="isMultiMember && !allMembersDone">
+          <p class="todo__menu-tip">谁完成了？</p>
+          <button
+            v-for="m in memberList"
+            :key="m.id"
+            class="todo__menu-item todo__menu-member"
+            :class="{ 'todo__menu-member--done': m.status === 'done' || m.status === 'skipped' }"
+            @click="toggleMember(m)"
+          >
+            <img class="todo__menu-avatar" :src="avatarSrcOf(m)" :alt="m.name" />
+            <span class="todo__menu-name">{{ m.name }}</span>
+            <span class="todo__menu-state">
+              {{ m.status === 'done' || m.status === 'skipped' ? '撤销' : '完成' }}
+            </span>
+          </button>
+        </template>
+
         <button
-          v-if="!isDone"
+          v-else-if="!isDone"
           class="todo__menu-item todo__menu-item--ok"
           @click="pick('done')"
         >
@@ -162,14 +204,18 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
         </span>
         <span v-if="memberList.length" class="todo__tag todo__tag--member">
           <span class="todo__avatars">
-            <img
+            <span
               v-for="m in memberList.slice(0, 3)"
               :key="m.id"
-              :src="avatarSrcOf(m)"
-              :alt="m.name"
-            />
+              class="todo__avatar"
+              :class="{
+                'todo__avatar--done': m.status === 'done' || m.status === 'skipped'
+              }"
+            >
+              <img :src="avatarSrcOf(m)" :alt="m.name" />
+            </span>
           </span>
-          {{ memberLabel }}
+          {{ isMultiMember ? memberCountText : memberLabel }}
         </span>
       </div>
     </div>
@@ -297,6 +343,11 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   align-items: center;
 }
 
+.todo__tag--member .todo__avatar {
+  display: block;
+  position: relative;
+}
+
 .todo__tag--member .todo__avatars img {
   width: 0.85rem;
   height: 0.85rem;
@@ -305,8 +356,56 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   box-shadow: 0 0 0 1px var(--panel-3);
 }
 
-.todo__tag--member .todo__avatars img + img {
+/* 已完成的人：头像变淡 + 绿圈 */
+.todo__avatar--done img {
+  opacity: 0.45;
+  box-shadow: 0 0 0 1px var(--green) !important;
+}
+
+.todo__tag--member .todo__avatars .todo__avatar + .todo__avatar {
   margin-left: -0.28rem;
+}
+
+/* ---- 多人事项的成员菜单 ---- */
+.todo__menu-tip {
+  font-size: 0.66rem;
+  color: var(--text-3);
+  padding: 0.3rem 0.55rem 0.25rem;
+}
+
+.todo__menu-member {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.todo__menu-avatar {
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  flex: none;
+}
+
+.todo__menu-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo__menu-state {
+  font-size: 0.66rem;
+  color: var(--text-3);
+}
+
+.todo__menu-member--done .todo__menu-name {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.todo__menu-member--done .todo__menu-state {
+  color: var(--green);
 }
 
 .todo--done .todo__tag {

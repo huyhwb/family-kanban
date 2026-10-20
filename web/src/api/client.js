@@ -73,9 +73,11 @@ export const api = {
     create: (payload) => request('/todos', { method: 'POST', body: payload }),
     update: (id, payload) => request(`/todos/${id}`, { method: 'PATCH', body: payload }),
     remove: (id) => request(`/todos/${id}`, { method: 'DELETE' }),
-    complete: (id) => request(`/todos/${id}/complete`, { method: 'POST' }),
+    complete: (id, memberId) =>
+      request(`/todos/${id}/complete`, { method: 'POST', body: memberId ? { memberId } : {} }),
     skip: (id) => request(`/todos/${id}/skip`, { method: 'POST' }),
-    restore: (id) => request(`/todos/${id}/restore`, { method: 'POST' }),
+    restore: (id, memberId) =>
+      request(`/todos/${id}/restore`, { method: 'POST', body: memberId ? { memberId } : {} }),
     dailyCounts: (params) => request(`/todos/daily-counts${qs(params)}`),
     memberSummary: (date) => request(`/todos/member-summary${qs({ date })}`)
   },
@@ -85,8 +87,11 @@ export const api = {
     upcoming: () => request('/reminders/upcoming'),
     rule: (todoId) => request(`/reminders/rules/${todoId}`),
     preview: (payload) => request('/reminders/preview', { method: 'POST', body: payload }),
-    handle: (id, action) =>
-      request(`/reminders/instances/${id}/handle`, { method: 'POST', body: { action } }),
+    handle: (id, action, memberId) =>
+      request(`/reminders/instances/${id}/handle`, {
+        method: 'POST',
+        body: memberId ? { action, memberId } : { action }
+      }),
     resync: () => request('/reminders/resync', { method: 'POST' })
   },
 

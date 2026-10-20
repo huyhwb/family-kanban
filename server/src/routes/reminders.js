@@ -33,7 +33,8 @@ router.post('/instances/:id/handle', (req, res) => {
     return res.status(400).json({ error: 'action 只能是 done / skip / snooze' })
   }
   const snoozeMinutes = Number(getSettings()['reminder.snoozeMinutes']) || 10
-  const result = scheduler.handleInstance(req.params.id, action, snoozeMinutes)
+  const memberId = req.body && req.body.memberId ? String(req.body.memberId) : null
+  const result = scheduler.handleInstance(req.params.id, action, snoozeMinutes, memberId)
   if (!result) return res.status(404).json({ error: '提醒实例不存在' })
   res.json(result)
 })

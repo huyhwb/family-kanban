@@ -241,11 +241,12 @@ export const useBoardStore = defineStore('board', {
       await Promise.all([this.refreshTodos(), this.refreshCounts()])
     },
 
-    async setTodoStatus(id, action) {
+    /** memberId 只在多人事项里用：指明是谁完成的 */
+    async setTodoStatus(id, action, memberId = null) {
       let updated = null
-      if (action === 'done') updated = await api.todos.complete(id)
+      if (action === 'done') updated = await api.todos.complete(id, memberId)
       else if (action === 'skip') updated = await api.todos.skip(id)
-      else updated = await api.todos.restore(id)
+      else updated = await api.todos.restore(id, memberId)
       await Promise.all([this.refreshTodos(), this.refreshCounts()])
       return updated
     },

@@ -32,11 +32,12 @@ function shapeRule(row) {
   }
 }
 
-/** 取某个待办的全部归属成员 */
+/** 取某个待办的全部归属成员（含各自的完成状态） */
 function membersOf(db, todoId) {
   return db
     .prepare(
-      `SELECT m.id, m.name, m.avatar_preset, m.avatar_file, m.sort_order
+      `SELECT m.id, m.name, m.avatar_preset, m.avatar_file, m.sort_order,
+              tm.status, tm.done_count, tm.done_at
        FROM todo_member tm JOIN member m ON m.id = tm.member_id
        WHERE tm.todo_id = ?
        ORDER BY m.sort_order ASC, m.created_at ASC;`
@@ -97,8 +98,15 @@ function shapeTodo(db, row) {
       id: m.id,
       name: m.name,
       avatarPreset: m.avatar_preset,
-      avatarFile: m.avatar_file
+      avatarFile: m.avatar_file,
+      // 各人自己的完成状态：多人事项需要分别勾选
+      status: m.status || 'pending',
+      doneCount: Math.min(targetCount, Math.max(0, Number(m.done_count) || 0)),
+      doneAt: m.done_at || null
     })),
+    // 已完成的人数 / 总人数，前端据此显示 1/2
+    memberDone: members.filter((m) => m.status === 'done' || m.status === 'skipped').length,
+    memberTotal: members.length,
     memberId: first ? first.id : null,
     memberName: first ? first.name : null,
     memberAvatarPreset: first ? first.avatar_preset : null,
@@ -148,7 +156,14 @@ function normalizeMemberIds(db, body) {
 }
 
 function setTodoMembers(db, todoId, memberIds) {
-  db.prepare('DELETE FROM todo_member WHERE todo_id = ?;').run(todoId)
+  // 保留已有成员行的完成状态：只增删，不整体重建
+  const keep = new Set(memberIds)
+  const existing = db.prepare('SELECT member_id FROM todo_member WHERE todo_id = ?;').all(todoId)
+  for (const row of existing) {
+    if (!keep.has(row.member_id)) {
+      db.prepare('DELETE FROM todo_member WHERE todo_id = ? AND member_id = ?;').run(todoId, row.member_id)
+    }
+  }
   const ins = db.prepare('INSERT OR IGNORE INTO todo_member (todo_id, member_id) VALUES (?, ?);')
   for (const id of memberIds) ins.run(todoId, id)
   // 主成员写回 todo.member_id，兼容旧查询与旧数据导出
@@ -186,8 +201,6 @@ function propagateSeries(db, rootId) {
          target_count = ?, updated_at = ?
      WHERE id = ?;`
   )
-  const del = db.prepare('DELETE FROM todo_member WHERE todo_id = ?;')
-  const ins = db.prepare('INSERT OR IGNORE INTO todo_member (todo_id, member_id) VALUES (?, ?);')
 
   for (const c of clones) {
     upd.run(
@@ -201,8 +214,8 @@ function propagateSeries(db, rootId) {
       nowIso(),
       c.id
     )
-    del.run(c.id)
-    for (const mid of members) ins.run(c.id, mid)
+    // 成员只增删、不重建，保住各人已有的完成状态
+    setTodoMembers(db, c.id, members)
   }
 }
 
@@ -607,7 +620,9 @@ router.post('/:id/complete', (req, res) => {
     return res.json(shapeTodo(db, row))
   }
 
-  scheduler.recordCompletion(req.params.id)
+  // 多人事项要指明是谁完成的；不传则所有未完成的成员一起算
+  const memberId = req.body && req.body.memberId ? String(req.body.memberId) : null
+  scheduler.recordCompletion(req.params.id, memberId)
   res.json(shapeTodo(db, db.prepare(`${SELECT_BASE} WHERE t.id = ?;`).get(req.params.id)))
 })
 
@@ -624,22 +639,8 @@ router.post('/:id/restore', (req, res) => {
   const row = db.prepare('SELECT * FROM todo WHERE id = ?;').get(req.params.id)
   if (!row) return res.status(404).json({ error: '待办不存在' })
 
-  // 重复任务撤销一次：从已完成回到 N-1，仍在进行中就再减一次
-  const target = clampTimes(row.target_count, 1)
-  const count = clampTimes(row.done_count, 0)
-  const nextCount = row.status === 'done' ? Math.max(0, target - 1) : Math.max(0, count - 1)
-
-  withTx(db, () => {
-    db.prepare(
-      "UPDATE todo SET status = 'pending', done_at = NULL, done_count = ?, updated_at = ? WHERE id = ?;"
-    ).run(nextCount, nowIso(), req.params.id)
-    if (row.status !== 'pending') {
-      db.prepare(
-        "DELETE FROM completion_log WHERE todo_id = ? AND act_date = date('now', 'localtime');"
-      ).run(req.params.id)
-    }
-  })
-
+  const memberId = req.body && req.body.memberId ? String(req.body.memberId) : null
+  scheduler.undoCompletion(req.params.id, memberId)
   res.json(shapeTodo(db, db.prepare(`${SELECT_BASE} WHERE t.id = ?;`).get(req.params.id)))
 })
 

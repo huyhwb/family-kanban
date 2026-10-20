@@ -286,7 +286,13 @@ function materializeSeries(db, rule) {
       nowIso(),
       row.id
     )
-    db.prepare('DELETE FROM todo_member WHERE todo_id = ?;').run(row.id)
+    // 成员只增删、不重建，保住各人已有的完成状态
+    const keep = new Set(members)
+    for (const m of db.prepare('SELECT member_id FROM todo_member WHERE todo_id = ?;').all(row.id)) {
+      if (!keep.has(m.member_id)) {
+        db.prepare('DELETE FROM todo_member WHERE todo_id = ? AND member_id = ?;').run(row.id, m.member_id)
+      }
+    }
     for (const mid of members) insertMember.run(row.id, mid)
   }
 
@@ -420,7 +426,7 @@ function findDue(windowSeconds = 60) {
   const db = getDb()
   const upper = dayjs().add(windowSeconds, 'second').format(FMT)
   const lower = dayjs().subtract(EXPIRE_MINUTES, 'minute').format(FMT)
-  return db
+  const rows = db
     .prepare(
       `SELECT ri.id, ri.fire_at, ri.status, ri.seq, ri.rule_id,
               t.id AS todo_id, t.title, t.note, t.due_date, t.due_time,
@@ -435,6 +441,16 @@ function findDue(windowSeconds = 60) {
        ORDER BY ri.fire_at ASC;`
     )
     .all(upper, lower)
+
+  // 多人事项要按人勾选，浮层得知道都有谁、谁已经完成
+  const memberStmt = db.prepare(
+    `SELECT m.id, m.name, m.avatar_preset, m.avatar_file, tm.status
+     FROM todo_member tm JOIN member m ON m.id = tm.member_id
+     WHERE tm.todo_id = ?
+     ORDER BY m.sort_order ASC, m.created_at ASC;`
+  )
+  for (const row of rows) row.members = memberStmt.all(row.todo_id)
+  return rows
 }
 
 /** 某条规则当天剩余的提醒（用于中栏提示条） */
@@ -455,7 +471,7 @@ function findUpcomingToday() {
     .all(start, end)
 }
 
-function handleInstance(id, action, snoozeMinutes = 10) {
+function handleInstance(id, action, snoozeMinutes = 10, memberId = null) {
   const db = getDb()
   const inst = db.prepare('SELECT * FROM reminder_instance WHERE id = ?;').get(id)
   if (!inst) return null
@@ -477,8 +493,8 @@ function handleInstance(id, action, snoozeMinutes = 10) {
   )
 
   if (status === 'done') {
-    // 走统一入口：每天多次的任务只算一次，不会一键变成已完成
-    recordCompletion(inst.todo_id)
+    // 走统一入口：多次任务只算一次；多人事项只算指定那个人
+    recordCompletion(inst.todo_id, memberId)
   }
   return { id, status }
 }
@@ -488,30 +504,141 @@ function handleInstance(id, action, snoozeMinutes = 10) {
  * 多成员归属时给每个成员各写一条，保证个人统计不失真。
  */
 /**
- * 记录「今天完成了一次」。
- * target_count > 1 的重复任务逐次累加，够数才算完成；
- * 一次性事项等价于直接标记完成。
+ * 记录「完成了一次」。
+ * - 多人事项：传 memberId 只作用于该成员；不传则所有未完成的成员一起算；
+ *   每人各自攒够 target_count 才算完成，全部完成后整条待办才算完成。
+ * - 一个人（或没有归属）的事项：沿用原来的整条计数。
  */
-function recordCompletion(todoId) {
+function recordCompletion(todoId, memberId = null) {
   const db = getDb()
   const todo = db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
   if (!todo) return null
   if (todo.status === 'done' || todo.status === 'skipped') return todo
 
   const target = Math.max(1, Number(todo.target_count) || 1)
-  const count = Math.max(0, Math.min(target, Number(todo.done_count) || 0))
+  const ts = nowIso()
+  const today = dayjs().format(DAY)
+  const rows = db
+    .prepare('SELECT member_id, status, done_count FROM todo_member WHERE todo_id = ? ORDER BY member_id;')
+    .all(todoId)
 
-  if (target > 1 && count + 1 < target) {
-    db.prepare('UPDATE todo SET done_count = ?, updated_at = ? WHERE id = ?;').run(
-      count + 1,
-      nowIso(),
-      todoId
-    )
+  // 没有成员归属：整条计数
+  if (!rows.length) {
+    const count = Math.max(0, Math.min(target, Number(todo.done_count) || 0))
+    if (target > 1 && count + 1 < target) {
+      db.prepare('UPDATE todo SET done_count = ?, updated_at = ? WHERE id = ?;').run(count + 1, ts, todoId)
+      return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
+    }
+    completeTodo(todoId, 'done')
+    db.prepare('UPDATE todo SET done_count = ? WHERE id = ?;').run(target, todoId)
     return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
   }
 
-  completeTodo(todoId, 'done')
-  db.prepare('UPDATE todo SET done_count = ? WHERE id = ?;').run(target, todoId)
+  const picked = memberId
+    ? rows.filter((r) => r.member_id === memberId && r.status === 'pending')
+    : rows.filter((r) => r.status === 'pending')
+  if (!picked.length) return todo
+
+  const insLog = db.prepare(
+    `INSERT INTO completion_log (id, todo_id, member_id, action, act_date, acted_at)
+     VALUES (?, ?, ?, 'done', ?, ?);`
+  )
+  const upd = db.prepare(
+    'UPDATE todo_member SET done_count = ?, status = ?, done_at = ? WHERE todo_id = ? AND member_id = ?;'
+  )
+
+  withTx(db, () => {
+    for (const row of picked) {
+      const count = Math.max(0, Math.min(target, Number(row.done_count) || 0))
+      if (count + 1 < target) {
+        upd.run(count + 1, 'pending', null, todoId, row.member_id)
+        continue
+      }
+      upd.run(target, 'done', ts, todoId, row.member_id)
+      insLog.run(uid(), todoId, row.member_id, today, ts)
+    }
+
+    const after = db
+      .prepare('SELECT status, done_count FROM todo_member WHERE todo_id = ?;')
+      .all(todoId)
+    const allDone = after.every((m) => m.status === 'done' || m.status === 'skipped')
+    // 整条进度取"每个人各自完成了几次"里的最小值，表示大家都做到了第几次
+    const least = after.reduce(
+      (n, m) => Math.min(n, Math.min(target, Number(m.done_count) || 0)),
+      target
+    )
+    if (allDone) {
+      db.prepare(
+        "UPDATE todo SET status = 'done', done_at = ?, done_count = ?, updated_at = ? WHERE id = ?;"
+      ).run(ts, target, ts, todoId)
+    } else {
+      db.prepare('UPDATE todo SET done_count = ?, updated_at = ? WHERE id = ?;').run(least, ts, todoId)
+    }
+  })
+
+  return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
+}
+
+/**
+ * 撤销一次完成。
+ * 传 memberId 只回退该成员；不传则整条回到未完成（清掉当天完成记录）。
+ */
+function undoCompletion(todoId, memberId = null) {
+  const db = getDb()
+  const todo = db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
+  if (!todo) return null
+
+  const target = Math.max(1, Number(todo.target_count) || 1)
+  const ts = nowIso()
+  const rows = db
+    .prepare('SELECT member_id, status, done_count FROM todo_member WHERE todo_id = ?;')
+    .all(todoId)
+
+  if (rows.length && memberId) {
+    const row = rows.find((r) => r.member_id === memberId)
+    if (!row) return todo
+    const next = row.status === 'done' ? Math.max(0, target - 1) : Math.max(0, (Number(row.done_count) || 0) - 1)
+    withTx(db, () => {
+      db.prepare(
+        "UPDATE todo_member SET done_count = ?, status = 'pending', done_at = NULL WHERE todo_id = ? AND member_id = ?;"
+      ).run(next, todoId, memberId)
+      // 只在"该成员真的完成过"时才删记录（避免误删别人的）
+      if (row.status === 'done') {
+        db.prepare(
+          `DELETE FROM completion_log WHERE id IN (
+             SELECT id FROM completion_log
+             WHERE todo_id = ? AND member_id = ? AND act_date = date('now','localtime')
+             ORDER BY acted_at DESC LIMIT 1);`
+        ).run(todoId, memberId)
+      }
+      const least = db
+        .prepare('SELECT done_count FROM todo_member WHERE todo_id = ?;')
+        .all(todoId)
+        .reduce((n, m) => Math.min(n, Number(m.done_count) || 0), target)
+      db.prepare("UPDATE todo SET status = 'pending', done_at = NULL, done_count = ?, updated_at = ? WHERE id = ?;").run(least, ts, todoId)
+    })
+    return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
+  }
+
+  // 整条撤销
+  const count = Math.max(0, Math.min(target, Number(todo.done_count) || 0))
+  const nextCount = todo.status === 'done' ? Math.max(0, target - 1) : Math.max(0, count - 1)
+  withTx(db, () => {
+    db.prepare(
+      "UPDATE todo SET status = 'pending', done_at = NULL, done_count = ?, updated_at = ? WHERE id = ?;"
+    ).run(nextCount, ts, todoId)
+    if (rows.length) {
+      db.prepare("UPDATE todo_member SET status = 'pending', done_at = NULL, done_count = ? WHERE todo_id = ?;").run(
+        nextCount,
+        todoId
+      )
+    }
+    if (todo.status !== 'pending') {
+      db.prepare(
+        "DELETE FROM completion_log WHERE todo_id = ? AND act_date = date('now', 'localtime');"
+      ).run(todoId)
+    }
+  })
   return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
 }
 
@@ -537,6 +664,19 @@ function completeTodo(todoId, action = 'done') {
       ts,
       todoId
     )
+    // 成员行跟着走：跳过就都标 skipped，完成就都标 done
+    if (members.length) {
+      const target = Math.max(1, Number(todo.target_count) || 1)
+      if (action === 'skip') {
+        db.prepare(
+          "UPDATE todo_member SET status = 'skipped', done_at = ? WHERE todo_id = ? AND status = 'pending';"
+        ).run(ts, todoId)
+      } else {
+        db.prepare(
+          "UPDATE todo_member SET status = 'done', done_count = ?, done_at = ? WHERE todo_id = ? AND status = 'pending';"
+        ).run(target, ts, todoId)
+      }
+    }
     for (const memberId of targets) {
       ins.run(uid(), todoId, memberId, action, today, ts)
     }
@@ -599,6 +739,7 @@ module.exports = {
   handleInstance,
   completeTodo,
   recordCompletion,
+  undoCompletion,
   dropInstances,
   memberIdsOf,
   startScheduler,

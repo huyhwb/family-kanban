@@ -140,6 +140,25 @@ const migrations = [
   `
   -- solar=按公历同月同日；lunar=按农历同月同日（由 start_date 的农历日期推算）
   ALTER TABLE reminder_rule ADD COLUMN yearly_kind TEXT NOT NULL DEFAULT 'solar';
+  `,
+
+  // v6 —— 多人事项按人完成：各自勾选，全部完成后整条才算完成
+  `
+  ALTER TABLE todo_member ADD COLUMN status     TEXT    NOT NULL DEFAULT 'pending';
+  ALTER TABLE todo_member ADD COLUMN done_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE todo_member ADD COLUMN done_at    TEXT;
+
+  -- 历史数据：整条已完成的，成员行同步为已完成
+  UPDATE todo_member
+     SET status = 'done',
+         done_count = 1,
+         done_at = (SELECT t.done_at FROM todo t WHERE t.id = todo_member.todo_id)
+   WHERE todo_id IN (SELECT id FROM todo WHERE status = 'done');
+
+  UPDATE todo_member
+     SET status = 'skipped',
+         done_at = (SELECT t.done_at FROM todo t WHERE t.id = todo_member.todo_id)
+   WHERE todo_id IN (SELECT id FROM todo WHERE status = 'skipped');
   `
 ]
 
