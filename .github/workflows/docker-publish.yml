@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # 纯文档改动不必重新构建镜像，省一次构建时间
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.shots/**'
   workflow_dispatch:
 
 env:

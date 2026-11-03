@@ -61,24 +61,36 @@ PAT 在 GitHub → Settings → Developer settings → Personal access tokens �
 
 ## 二、NAS 上改用镜像
 
-把 `docker-compose.yml` 里的 `build:` 整段删掉，`image:` 换成 ghcr 地址：
+**完整可复制的 compose 文件见 [README 第三节「方式一：直接用现成镜像」](../README.md#三docker-部署)**。
+核心区别只有一条：不要 `build:` 段，`image:` 指向 ghcr 的版本号标签。
 
 ```yaml
 services:
   kanban:
-    image: ghcr.io/huyhwb/family-kanban:1.0.0
-    # build: 段删掉
+    image: ghcr.io/huyhwb/family-kanban:1.0.0   # 升级时改版本号
     container_name: family-kanban
     restart: unless-stopped
     init: true
+    stop_grace_period: 15s
     ports:
-      - "${KANBAN_PORT:-12333}:12333"
+      - "12333:12333"
     environment:
       TZ: Asia/Shanghai
       PORT: "12333"
       DATA_DIR: /data
     volumes:
-      - "${DATA_DIR_HOST:-./data}:/data"
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:12333/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 ```
 
 然后：
@@ -88,7 +100,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`.env` 里的 `DATA_DIR_HOST` 照旧生效，数据不受影响。
+数据卷照旧挂载到 `./data`（或你在 compose 里写的绝对路径），升级不受影响。
 
 ---
 

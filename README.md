@@ -62,7 +62,71 @@ npm run dev
 
 > 适合部署在 NAS、小主机、树莓派等长期在线的设备上。**群晖 / 威联通的详细步骤见 [docs/NAS-deploy.md](docs/NAS-deploy.md)**。
 
-### 构建上传包
+### 方式一：直接用现成镜像（推荐）
+
+镜像托管在 `ghcr.io`，公开可拉——NAS 上**不用登录、不用构建**，一条命令起服务。
+把下面内容保存为 `docker-compose.yml`（放在任意目录，例如 `/vol1/1000/Docker/family-kanban/`）：
+
+```yaml
+services:
+  kanban:
+    # 锁定版本号，升级时只改这一行；也可用 sha-xxxxxx 固定到某次构建
+    image: ghcr.io/huyhwb/family-kanban:1.0.0
+    container_name: family-kanban
+    restart: unless-stopped
+    # 让 Node 正确接收 SIGTERM、回收子进程（官方镜像不带 init）
+    init: true
+    stop_grace_period: 15s
+
+    ports:
+      # 左边是宿主机端口，被占用就改这里，例如 "8080:12333"
+      - "12333:12333"
+
+    environment:
+      # 必须固定时区：提醒时刻依赖它，宿主 TZ 古怪时别跟着变
+      TZ: Asia/Shanghai
+      PORT: "12333"
+      DATA_DIR: /data
+
+    volumes:
+      # 数据库与头像，务必持久化。放别处就改成绝对路径，
+      # 例如 /vol1/1000/Docker/family-kanban:/data
+      - ./data:/data
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:12333/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+```
+
+```bash
+docker compose up -d          # 首次会拉取镜像，约 100~150 MB
+docker compose ps             # 等 health 变成 healthy
+```
+
+访问 `http://<设备IP>:12333` 即可。
+
+- **升级**：把 `image` 的版本号改成新值 → `docker compose pull && docker compose up -d`
+- **回滚**：版本号改回旧值同理；`data/` 里的数据不受影响
+- **核对版本**：看板「设置 → 服务信息」，或 `curl http://<IP>:12333/api/health`
+
+> 数据库有向下兼容的自动迁移，升级不会丢数据；但**不建议降级到写过新字段的旧版本**，降级前先备份 `data/`。
+
+### 方式二：本地构建（没有镜像仓库或要改代码时）
+
+#### 构建上传包
 
 ```bash
 npm run pack        # 产出 release/family-kanban-nas.zip（约 120KB，只含构建必需文件）
@@ -108,7 +172,9 @@ docker compose logs -f --tail=100   # 查看日志（含局域网访问地址）
 docker compose ps                   # 看状态，health 应为 healthy
 docker compose restart              # 重启
 docker compose down                 # 停止（数据保留在 ./data）
-docker compose up -d --build        # 更新代码后重新构建
+
+docker compose pull && docker compose up -d   # 方式一：升级到新版本
+docker compose up -d --build                  # 方式二：改代码后重新构建
 ```
 
 ---
@@ -279,7 +345,7 @@ docker compose up -d --build        # 更新代码后重新构建
 
 | 日期 | 内容 |
 | --- | --- |
-| 2026-11-03 | **家庭药箱**：库存 / 效期 / 条码，手动、扫码、拍照 AI 识别三种录入；**版本号机制**：设置页显示版本，镜像按版本号打标签 |
+| 2026-11-03 | **家庭药箱**：库存 / 效期 / 条码，手动、扫码、拍照 AI 识别三种录入；**版本号机制**：设置页显示版本，镜像按版本号打标签；README 补标准 compose 文件 |
 | 2026-10-21 | 清理调试产物；补充更新日志与维护约定 |
 | 2026-10-20 | **纪念日**（公历 / 农历、每年一次、不限时长、不进四象限）；**导出 .ics 到手机日历**；**多人事项按人完成** |
 | 2026-10-18 | 重复任务计次（1/3）；重复规则展开为逐日待办；ghcr 镜像自动构建 |
