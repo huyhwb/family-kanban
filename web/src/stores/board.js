@@ -15,6 +15,7 @@ export const useBoardStore = defineStore('board', {
 
     members: [],
     settings: {},
+    version: '',
 
     todayStr: dayjs().format(DATE_FMT),
     selectedDate: dayjs().format(DATE_FMT),
@@ -107,6 +108,7 @@ export const useBoardStore = defineStore('board', {
         const data = await api.bootstrap()
         this.members = data.members
         this.settings = data.settings
+        this.version = data.version || ''
         this.todayStr = data.today
         this.selectedDate = data.today
         this.month = data.today.slice(0, 7)

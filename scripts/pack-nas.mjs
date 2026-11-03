@@ -33,6 +33,7 @@ const ZIP = join(RELEASE, `${NAME}.zip`)
 /** 逐文件复制（保持相对路径） */
 const FILES = [
   'Dockerfile',
+  'package.json',
   'docker-compose.yml',
   '.dockerignore',
   'README.md',

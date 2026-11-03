@@ -35,7 +35,7 @@ git push -u origin main
 `family-kanban`，地址形如：
 
 ```
-ghcr.io/huyhwb/family-kanban:latest
+ghcr.io/huyhwb/family-kanban:1.0.0
 ```
 
 ### 4. 让 NAS 能拉（二选一）
@@ -66,7 +66,7 @@ PAT 在 GitHub → Settings → Developer settings → Personal access tokens �
 ```yaml
 services:
   kanban:
-    image: ghcr.io/huyhwb/family-kanban:latest
+    image: ghcr.io/huyhwb/family-kanban:1.0.0
     # build: 段删掉
     container_name: family-kanban
     restart: unless-stopped
@@ -100,13 +100,15 @@ docker compose up -d
 git add -A && git commit -m "fix: xxx" && git push
 ```
 
-Actions 自动构建新的 `latest` 与 `sha-xxxx` 标签。NAS 上：
+Actions 会读取根 `package.json` 的 `version`，自动打出 **版本号标签**（如 `1.0.0`）与 `sha-xxxx` 短哈希。
+**不再发布 `latest`**，升级时改版本号即可，回滚也只需改回旧版本。NAS 上：
 
 ```bash
 docker compose pull && docker compose up -d
 ```
 
-想固定版本不被 `latest` 卷走，就用 `sha-xxxx` 或 `v1.0.0` 这种 tag，回滚时改一行即可。
+版本号写在仓库根 `package.json` 的 `version` 字段：改完推送，Actions 就产出同名镜像。
+想看当前跑的是哪个版本，打开看板「设置 → 数据 → 服务信息」，或直接 `curl http://<IP>:12333/api/health`。
 
 ---
 

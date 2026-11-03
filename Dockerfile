@@ -79,6 +79,9 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# 版本号来源（服务端启动时读取，用于接口与设置页展示）
+COPY package.json ./package.json
+
 # 生产依赖（含已编译好的 better-sqlite3）
 COPY --from=deps /app/server/node_modules ./server/node_modules
 # 后端源码（.dockerignore 已排除 node_modules，不会覆盖容器内的依赖）

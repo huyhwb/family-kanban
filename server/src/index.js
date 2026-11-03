@@ -40,11 +40,33 @@ const { router: settingsRouter } = require('./routes/settings')
 const { router: calendarRouter } = require('./routes/calendar')
 const { router: backupRouter } = require('./routes/backup')
 const { router: exportRouter } = require('./routes/export')
+const { router: medicinesRouter } = require('./routes/medicines')
+const { router: aiRouter } = require('./routes/ai')
+
+/** 版本号以仓库根 package.json 为准；容器里同样拷贝了这份文件 */
+function readVersion() {
+  const path = require('path')
+  for (const p of [
+    path.join(__dirname, '../../package.json'),
+    path.join(__dirname, '../package.json')
+  ]) {
+    try {
+      const v = require(p).version
+      if (v) return v
+    } catch (err) {
+      /* 换下一个候选 */
+    }
+  }
+  return '0.0.0'
+}
+
+const APP_VERSION = readVersion()
 
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'family-kanban',
+    version: APP_VERSION,
     driver: getDriverName(),
     tz: process.env.TZ,
     serverTime: dayjs().format('YYYY-MM-DDTHH:mm:ss'),
@@ -99,6 +121,7 @@ app.get('/api/bootstrap', (req, res) => {
     today,
     monthStart,
     monthEnd,
+    version: APP_VERSION,
     serverTime: dayjs().format('YYYY-MM-DDTHH:mm:ss'),
     serverTimestamp: Date.now(),
     settings: getSettings(),
@@ -142,6 +165,8 @@ app.use('/api/settings', settingsRouter)
 app.use('/api/calendar', calendarRouter)
 app.use('/api/backup', backupRouter)
 app.use('/api/export', exportRouter)
+app.use('/api/medicines', medicinesRouter)
+app.use('/api/ai', aiRouter)
 
 app.use('/api', (req, res) => {
   res.status(404).json({ error: '接口不存在' })

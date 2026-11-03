@@ -11,10 +11,11 @@
 | 区域 | 能力 |
 | --- | --- |
 | **左栏 · 日历** | 月视图、农历 / 节气 / 干支、法定节假日与调休「休·班」角标、当日进度（第 N 天 / 第 N 周）、**右上角秒级实时时钟**、放假安排速查、月/年快速跳转、返回今天 |
-| **中栏 · 待办** | 四象限视图（重要紧急矩阵）与清单视图一键切换；点击事项前圆圈可「完成 / 编辑 / 删除」；**每天多次的重复任务勾选时显示 1/3 进度，做够次数才转已完成**；按日期 × 成员叠加筛选；常用语一键填入；提醒规则可视化预览；**一键导出 .ics 到手机 / 平板日历（1 天 / 3 天 / 7 天 / 1 个月 / 全部）** |
+| **中栏 · 待办** | 四象限视图（重要紧急矩阵）与清单视图一键切换；点击事项前圆圈可「完成 / 编辑 / 删除」；**每天多次的重复任务勾选时显示 1/3 进度，做够次数才转已完成**；**多人事项各人分别勾选，全部完成整条才转已完成**；按日期 × 成员叠加筛选；常用语一键填入；提醒规则可视化预览；**一键导出 .ics 到手机 / 平板日历（1 天 / 3 天 / 7 天 / 1 个月 / 全部）** |
 | **右栏 · 成员** | 「全部」+ 家庭成员头像（内置 6 个自绘卡通头像，支持上传照片）；显示未完成数量角标；点击即筛选该成员待办；底部**横竖屏切换 / 方向锁定 / 设置** |
 | **提醒** | 每天 N 次、从几点开始、隔几小时一次、连续多少天；支持按天 / 每周星期几 / 工作日 / 非工作日重复；**纪念日按「每年一次」重复，可选公历或农历同月同日**；到点全屏浮层 + 提示音；支持「已完成 / 稍后提醒 / 跳过本次」 |
-| **设置** | 成员管理（头像 / 名称 / 主页显隐 / 常用语 / 增删）、提醒默认值、完成率与连续打卡统计、备份导出导入、主题切换、**屏幕方向与缩放**、放假安排年度更新 |
+| **设置** | 成员管理（头像 / 名称 / 主页显隐 / 常用语 / 增删）、提醒默认值、完成率与连续打卡统计、备份导出导入、主题切换、**屏幕方向与缩放**、放假安排年度更新、**药箱 AI 识别配置**、**当前版本号** |
+| **药箱** | 日历右上角时钟左侧的按钮进入；按有效期排序，过期 / 临期 / 缺货分色；品牌、药品名、规格、保质期、生产厂家一目了然；**剩余量分「整件 + 散装」两栏**（1 盒 + 5 片、3 盒 + 1 袋、20 ml），支持手动录入 / 扫码 / 拍照 AI 识别三种方式 |
 | **自适应** | 根字号按「可用宽 ÷ 设计宽、可用高 ÷ 设计高」取小值等比缩放，任何分辨率都不溢出、不错位；超宽屏封顶 28px、极小屏兜底 7.5px |
 
 **明确不做**：公网访问、账号体系、多租户、移动端竖屏适配、第三方日历接入。
@@ -154,9 +155,13 @@ docker compose up -d --build        # 更新代码后重新构建
 ├── Dockerfile                    # 三阶段构建
 ├── deploy/nas.env.example        # NAS 部署可调参数模板
 ├── scripts/pack-nas.mjs          # 生成 NAS 上传包（npm run pack）
+├── .github/workflows/            # GitHub Actions：构建并推送 ghcr 镜像
+├── .shots/                       # 调试工具（gitignore）：CDP 截图 / 造数据
 ├── docs/
 │   ├── 策划方案.md                # 需求与设计文档
-│   └── NAS-deploy.md             # 群晖 / 威联通 / SSH 部署步骤
+│   ├── NAS-deploy.md             # 群晖 / 威联通 / SSH 部署步骤
+│   ├── ghcr.md                   # 用 Actions 出镜像、NAS 拉取
+│   └── push-to-dockerhub.md      # 推送镜像到 Docker Hub
 ├── release/                      # 打包产物（gitignore）
 ├── data/                         # 运行时数据（自动创建，已 gitignore）
 │   ├── kanban.db                 # SQLite 数据库
@@ -165,13 +170,14 @@ docker compose up -d --build        # 更新代码后重新构建
 │   └── src/
 │       ├── index.js              # 入口、静态托管、/api/bootstrap
 │       ├── db/                   # 建表迁移、种子数据、驱动适配
-│       ├── routes/               # members / todos / phrases / reminders / stats / settings / calendar / backup
-│       ├── services/             # reminderScheduler（提醒实例生成）
+│       ├── routes/               # members / todos / phrases / reminders / stats / settings / calendar / backup / export / medicines / ai
+│       ├── services/             # reminderScheduler（规则展开、实例生成）
 │       └── static/holidays/      # 法定节假日数据（2024–2026）
 └── web/                          # 前端 Vue 3
     └── src/
-        ├── components/           # CalendarPanel / TodoPanel / MemberRail / SettingsDialog / TodoEditor / ReminderOverlay
-        ├── stores/               # board 待办与筛选 / reminder 轮询 / display 缩放与横竖屏
+        ├── views/                # MedicinePage 药箱（整页切换）
+        ├── components/           # CalendarPanel / TodoPanel / MemberRail / SettingsDialog / TodoEditor / ReminderOverlay / MedicineEditor / MedicineScanner
+        ├── stores/               # board 待办与筛选 / reminder 轮询 / display 缩放与横竖屏 / medicine 药箱
         ├── lib/                  # lunar 农历、avatars 自绘头像、sound 提示音、image 头像压缩
         └── styles/main.css       # 主题变量与基础样式（body 即可旋转的「舞台」）
 ```
@@ -218,10 +224,16 @@ docker compose up -d --build        # 更新代码后重新构建
 | GET | `/api/health` | 健康检查（含驱动、时区、服务端时间） |
 | GET | `/api/bootstrap` | 首屏聚合：成员 + 设置 + 当天待办 + 当月角标 |
 | GET/POST/PATCH/DELETE | `/api/todos` | 待办增删改查，支持 `?date=&memberId=&status=&quadrant=` |
-| POST | `/api/todos/:id/complete` \| `skip` \| `restore` | 状态流转 |
+| POST | `/api/todos/:id/complete` \| `skip` \| `restore` | 状态流转；多人事项传 `{ "memberId": "..." }` 只记该成员 |
 | GET | `/api/todos/daily-counts` | 日历角标：按日聚合数量 |
-| GET | `/api/reminders/due?window=60` | 前端轮询：当前应展示的提醒 |
-| POST | `/api/reminders/instances/:id/handle` | `done` / `skip` / `snooze` |
+| GET | `/api/reminders/due?window=60` | 前端轮询：当前应展示的提醒（含各成员完成状态） |
+| POST | `/api/reminders/instances/:id/handle` | `done` / `skip` / `snooze`，可带 `memberId` |
+| GET | `/api/export/ics?scope=1d\|3d\|7d\|1m\|all` | 导出 iCalendar，供手机 / 平板日历导入 |
+| GET/POST/PATCH/DELETE | `/api/medicines` | 药箱增删改查，支持 `?q=&filter=all\|soon\|expired\|empty` |
+| GET | `/api/medicines/stats` | 品种数、临期、过期、缺货 |
+| POST | `/api/medicines/:id/adjust` | 取用 / 补货：`{packDelta, looseDelta}` 精确加减，或 `{delta:-1}` 先扣散装再扣整件 |
+| POST | `/api/ai/medicine` | 图片识别药品，body `{ "image": "data:image/jpeg;base64,…" }` |
+| POST | `/api/ai/ping` | 测试 AI 接口连通性 |
 | GET | `/api/stats?range=7d` | 完成率、连续打卡、按成员统计 |
 | GET | `/api/calendar/holidays?year=2026` | 节假日与调休 |
 | GET/POST | `/api/backup/export` \| `import` | 备份导出与导入 |
@@ -260,3 +272,23 @@ docker compose up -d --build        # 更新代码后重新构建
 | 前端 | Vue 3 + Vite + Pinia，原生 CSS 变量主题，日历自研 + `lunar-javascript` |
 | 后端 | Node 22 + Express 5 + SQLite（WAL）+ node-cron |
 | 部署 | Docker 多阶段构建，单容器单端口 12333 |
+
+---
+
+## 十一、更新日志
+
+| 日期 | 内容 |
+| --- | --- |
+| 2026-11-03 | **家庭药箱**：库存 / 效期 / 条码，手动、扫码、拍照 AI 识别三种录入；**版本号机制**：设置页显示版本，镜像按版本号打标签 |
+| 2026-10-21 | 清理调试产物；补充更新日志与维护约定 |
+| 2026-10-20 | **纪念日**（公历 / 农历、每年一次、不限时长、不进四象限）；**导出 .ics 到手机日历**；**多人事项按人完成** |
+| 2026-10-18 | 重复任务计次（1/3）；重复规则展开为逐日待办；ghcr 镜像自动构建 |
+| 2026-10-17 | 首版：日历 / 四象限待办 / 成员栏 / 提醒浮层 / 平板自适应 / Docker 部署 |
+
+---
+
+## 十二、维护约定
+
+- 每次功能变更后同步更新本文件（功能一览、接口速查、更新日志三处）。
+- 变更前顺手清理调试产物：`.shots/` 下的截图与临时浏览器目录（`prof*`）、`release/` 旧包。
+- 数据库迁移只增不改，版本号写在 `server/src/db/schema.js` 的 `migrations` 数组里，启动时按 `user_version` 自动执行。

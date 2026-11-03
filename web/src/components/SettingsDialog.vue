@@ -19,6 +19,7 @@ const display = useDisplayStore()
 const TABS = [
   { key: 'members', name: '成员', hint: '头像 · 名称 · 常用语' },
   { key: 'reminder', name: '提醒', hint: '默认频率 · 提示音' },
+  { key: 'medicine', name: '药箱', hint: 'AI 识别 · 临期提醒' },
   { key: 'stats', name: '统计', hint: '完成率 · 连续打卡' },
   { key: 'data', name: '数据', hint: '显示 · 备份 · 主题' }
 ]
@@ -199,6 +200,63 @@ const reminderDefaults = reactive({
 })
 
 const soundOn = computed(() => String(board.settings['ui.soundEnabled'] ?? '1') !== '0')
+
+/* ---- 药箱：AI 识别配置 ---- */
+const aiForm = reactive({
+  baseUrl: 'https://api.agnes-ai.cn/v1',
+  model: 'agnes-2.5-flash',
+  key: ''
+})
+const aiTesting = ref(false)
+const warnDays = ref(30)
+
+function syncMedicineSettings() {
+  aiForm.baseUrl = board.settings['medicine.aiBaseUrl'] || 'https://api.agnes-ai.cn/v1'
+  aiForm.model = board.settings['medicine.aiModel'] || 'agnes-2.5-flash'
+  aiForm.key = board.settings['medicine.aiKey'] || ''
+  warnDays.value = Number(board.settings['medicine.warnDays']) || 30
+}
+
+async function saveAi() {
+  try {
+    await board.updateSettings({
+      'medicine.aiBaseUrl': aiForm.baseUrl.trim(),
+      'medicine.aiModel': aiForm.model.trim() || 'agnes-2.5-flash',
+      'medicine.aiKey': aiForm.key.trim()
+    })
+    toastOk('AI 配置已保存')
+  } catch (err) {
+    toastError(err.message)
+  }
+}
+
+async function testAi() {
+  if (aiTesting.value) return
+  aiTesting.value = true
+  try {
+    // 先落盘，后端读的是库里的配置
+    await board.updateSettings({
+      'medicine.aiBaseUrl': aiForm.baseUrl.trim(),
+      'medicine.aiModel': aiForm.model.trim() || 'agnes-2.5-flash',
+      'medicine.aiKey': aiForm.key.trim()
+    })
+    await api.ai.ping()
+    toastOk('连接成功')
+  } catch (err) {
+    toastError(err.message)
+  } finally {
+    aiTesting.value = false
+  }
+}
+
+async function saveWarnDays() {
+  try {
+    await board.updateSettings({ 'medicine.warnDays': Number(warnDays.value) || 30 })
+    toastOk('临期天数已保存')
+  } catch (err) {
+    toastError(err.message)
+  }
+}
 
 function syncReminderDefaults() {
   reminderDefaults.timesPerDay = Number(board.settings['reminder.defaultTimesPerDay']) || 1
@@ -389,6 +447,7 @@ watch(
     if (!open) return
     tab.value = 'members'
     syncReminderDefaults()
+    syncMedicineSettings()
     await board.reloadMembers()
     await loadPhrases()
     loadHealth()
@@ -427,7 +486,7 @@ function close() {
               <span class="st__tab-hint">{{ t.hint }}</span>
             </button>
             <div class="st__rail-foot">
-              <span v-if="health">驱动 {{ health.driver }}</span>
+              <span>v{{ health?.version || board.version || '—' }}</span>
             </div>
           </aside>
 
@@ -520,6 +579,69 @@ function close() {
 
                 <div class="st__hintbox">
                   提示：点左侧头像可切换内置卡通头像或上传自己的照片（会自动裁切为正方形并压缩）。
+                </div>
+              </template>
+
+              <!-- ============ 药箱 ============ -->
+              <template v-else-if="tab === 'medicine'">
+                <p class="st__desc">
+                  药箱的拍照识别走 OpenAI 兼容接口，默认使用 Agnes，也可以换成别的兼容服务。
+                </p>
+
+                <div class="sgroup">
+                  <div class="sgroup__title">AI 识别</div>
+                  <div class="srow">
+                    <span class="srow__label">接口地址</span>
+                    <input
+                      v-model="aiForm.baseUrl"
+                      class="field srow__input srow__input--wide"
+                      placeholder="https://api.agnes-ai.cn/v1"
+                    />
+                  </div>
+                  <div class="srow">
+                    <span class="srow__label">模型</span>
+                    <input
+                      v-model="aiForm.model"
+                      class="field srow__input srow__input--wide"
+                      placeholder="agnes-2.5-flash"
+                    />
+                  </div>
+                  <div class="srow">
+                    <span class="srow__label">API Key</span>
+                    <input
+                      v-model="aiForm.key"
+                      type="password"
+                      class="field srow__input srow__input--wide"
+                      placeholder="sk-..."
+                      autocomplete="off"
+                    />
+                  </div>
+                  <div class="srow srow--actions">
+                    <button class="btn btn--sm" :disabled="aiTesting" @click="testAi">
+                      {{ aiTesting ? '测试中…' : '测试连接' }}
+                    </button>
+                    <button class="btn btn--primary btn--sm" @click="saveAi">保存</button>
+                  </div>
+                  <p class="sgroup__text">
+                    密钥只存在本机数据库（`data/kanban.db`），识别时由服务端转发图片，不会写进前端代码。
+                  </p>
+                </div>
+
+                <div class="sgroup">
+                  <div class="sgroup__title">临期提醒</div>
+                  <div class="srow">
+                    <span class="srow__label">距离到期不足</span>
+                    <input
+                      v-model.number="warnDays"
+                      type="number"
+                      min="1"
+                      max="365"
+                      class="field srow__input"
+                    />
+                    <span class="srow__unit">天</span>
+                    <button class="btn btn--sm" @click="saveWarnDays">保存</button>
+                  </div>
+                  <p class="sgroup__text">药箱里会用黄色标出这段时间内到期的药品。</p>
                 </div>
               </template>
 
@@ -791,6 +913,7 @@ function close() {
                 <div class="sgroup">
                   <div class="sgroup__title">服务信息</div>
                   <div v-if="health" class="info">
+                    <div><span>版本</span>v{{ health.version || board.version || '—' }}</div>
                     <div><span>服务</span>{{ health.app }}</div>
                     <div><span>数据库驱动</span>{{ health.driver }}</div>
                     <div><span>时区</span>{{ health.tz }}</div>
@@ -1248,6 +1371,13 @@ function close() {
   width: 5.5rem;
   height: 2.1rem;
   flex: none;
+}
+
+/* 长文本输入（接口地址、模型名、密钥）占满剩余宽度 */
+.srow__input--wide {
+  flex: 1;
+  width: auto;
+  min-width: 0;
 }
 
 .srow__unit {

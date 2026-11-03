@@ -83,8 +83,7 @@ export const api = {
   },
 
   reminders: {
-    due: (window = 60) => request(`/reminders/due${qs({ window })}`),
-    upcoming: () => request('/reminders/upcoming'),
+    due: (window = 60) => request(`/reminders/due${qs({ window })}`),    upcoming: () => request('/reminders/upcoming'),
     rule: (todoId) => request(`/reminders/rules/${todoId}`),
     preview: (payload) => request('/reminders/preview', { method: 'POST', body: payload }),
     handle: (id, action, memberId) =>
@@ -96,6 +95,21 @@ export const api = {
   },
 
   stats: (params) => request(`/stats${qs(params)}`),
+
+  medicines: {
+    list: (params) => request(`/medicines${qs(params)}`),
+    stats: () => request('/medicines/stats'),
+    units: () => request('/medicines/units'),
+    create: (payload) => request('/medicines', { method: 'POST', body: payload }),
+    update: (id, payload) => request(`/medicines/${id}`, { method: 'PATCH', body: payload }),
+    remove: (id) => request(`/medicines/${id}`, { method: 'DELETE' }),
+    adjust: (id, delta) => request(`/medicines/${id}/adjust`, { method: 'POST', body: { delta } })
+  },
+
+  ai: {
+    recognizeMedicine: (image) => request('/ai/medicine', { method: 'POST', body: { image } }),
+    ping: () => request('/ai/ping', { method: 'POST' })
+  },
 
   settings: {
     get: () => request('/settings'),

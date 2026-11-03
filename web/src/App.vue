@@ -12,6 +12,7 @@ import ReminderOverlay from './components/ReminderOverlay.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import TodoEditor from './components/TodoEditor.vue'
 import ToastHost from './components/ToastHost.vue'
+import MedicinePage from './views/MedicinePage.vue'
 import { toast } from './lib/toast'
 
 const board = useBoardStore()
@@ -24,6 +25,23 @@ display.init()
 const settingsOpen = ref(false)
 const editorOpen = ref(false)
 const editorTodo = ref(null)
+
+/** 当前页面：board 看板 / medicine 药箱，用 hash 保持刷新后仍在原页 */
+const view = ref(location.hash === '#medicine' ? 'medicine' : 'board')
+
+function syncView() {
+  view.value = location.hash === '#medicine' ? 'medicine' : 'board'
+}
+
+function openMedicine() {
+  location.hash = '#medicine'
+}
+
+function backToBoard() {
+  location.hash = ''
+}
+
+provide('openMedicine', openMedicine)
 
 let clockTimer = null
 
@@ -46,6 +64,7 @@ function onFirstInteract() {
 onMounted(async () => {
   window.addEventListener('pointerdown', onFirstInteract, { once: true })
   window.addEventListener('keydown', onFirstInteract, { once: true })
+  window.addEventListener('hashchange', syncView)
 
   await board.bootstrap()
   reminder.start()
@@ -60,6 +79,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', syncView)
   reminder.stop()
   if (clockTimer) clearInterval(clockTimer)
 })
@@ -98,9 +118,13 @@ function reloadAll() {
     </div>
 
     <template v-else>
-      <CalendarPanel class="board__col board__col--calendar" />
-      <TodoPanel class="board__col board__col--todos" />
-      <MemberRail class="board__col board__col--rail" />
+      <MedicinePage v-if="view === 'medicine'" @back="backToBoard" />
+
+      <template v-else>
+        <CalendarPanel class="board__col board__col--calendar" />
+        <TodoPanel class="board__col board__col--todos" />
+        <MemberRail class="board__col board__col--rail" />
+      </template>
     </template>
 
     <Transition name="fade">

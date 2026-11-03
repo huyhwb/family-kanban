@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import dayjs from 'dayjs'
 import { useBoardStore } from '../stores/board'
 
 const board = useBoardStore()
+const openMedicine = inject('openMedicine', () => {})
 
 const now = ref(new Date())
 let timer = null
@@ -152,9 +153,19 @@ function countOf(date) {
         <div class="cal__days">第 {{ dayOfYear }} 天 · 第 {{ weekOfYear }} 周</div>
       </div>
 
-      <div class="cal__clock">
-        <div class="cal__time">{{ clockText }}</div>
-        <div class="cal__fulldate">{{ selectedDay.format('YYYY-MM-DD') }} {{ weekdayText }}</div>
+      <div class="cal__right">
+        <button class="cal__med" title="家庭药箱" aria-label="家庭药箱" @click="openMedicine()">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="2.4" y="6.2" width="15.2" height="11.2" rx="2.2" stroke="currentColor" stroke-width="1.35" />
+            <path d="M7 6.2V4.8A1.6 1.6 0 0 1 8.6 3.2h2.8A1.6 1.6 0 0 1 13 4.8v1.4" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" />
+            <path d="M10 9.2v5.2M7.4 11.8h5.2" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" />
+          </svg>
+        </button>
+
+        <div class="cal__clock">
+          <div class="cal__time">{{ clockText }}</div>
+          <div class="cal__fulldate">{{ selectedDay.format('YYYY-MM-DD') }} {{ weekdayText }}</div>
+        </div>
       </div>
     </header>
 
@@ -359,6 +370,32 @@ function countOf(date) {
   font-size: 0.72rem;
   color: var(--text-3);
   margin-top: 0.15rem;
+}
+
+.cal__right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: none;
+}
+
+/* 时间左侧的药箱入口 */
+.cal__med {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-3);
+  display: grid;
+  place-items: center;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.cal__med:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-weak);
 }
 
 .cal__clock {

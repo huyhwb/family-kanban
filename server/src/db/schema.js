@@ -159,6 +159,37 @@ const migrations = [
      SET status = 'skipped',
          done_at = (SELECT t.done_at FROM todo t WHERE t.id = todo_member.todo_id)
    WHERE todo_id IN (SELECT id FROM todo WHERE status = 'skipped');
+  `,
+
+  // v7 —— 家庭药箱
+  `
+  CREATE TABLE IF NOT EXISTS medicine (
+    id            TEXT PRIMARY KEY,
+    brand         TEXT,                     -- 品牌
+    name          TEXT NOT NULL,            -- 药品名
+    spec          TEXT,                     -- 规格（如 10mg×24片/盒）
+    expiry_date   TEXT,                     -- 保质期（有效期至 YYYY-MM-DD）
+    manufacturer  TEXT,                     -- 生产厂家
+    quantity      REAL NOT NULL DEFAULT 0,  -- 剩余量
+    unit          TEXT NOT NULL DEFAULT '盒',
+    barcode       TEXT,                     -- 条码
+    note          TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_medicine_expiry  ON medicine(expiry_date);
+  CREATE INDEX IF NOT EXISTS idx_medicine_barcode ON medicine(barcode);
+  `,
+
+  // v8 —— 剩余量拆成「整件 + 散装」两栏：1盒 + 5片
+  `
+  ALTER TABLE medicine ADD COLUMN pack_count  REAL NOT NULL DEFAULT 0;
+  ALTER TABLE medicine ADD COLUMN pack_unit   TEXT NOT NULL DEFAULT '盒';
+  ALTER TABLE medicine ADD COLUMN loose_count REAL NOT NULL DEFAULT 0;
+  ALTER TABLE medicine ADD COLUMN loose_unit  TEXT NOT NULL DEFAULT '片';
+
+  -- 老数据：原来的 quantity/unit 就是整件数量
+  UPDATE medicine SET pack_count = quantity, pack_unit = unit;
   `
 ]
 

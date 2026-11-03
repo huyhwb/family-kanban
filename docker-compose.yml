@@ -11,7 +11,7 @@ services:
         # 想用官方源就设 BASE_IMAGE=node:22-slim
         BASE_IMAGE: "${BASE_IMAGE:-docker.m.daocloud.io/library/node:22-slim}"
     # 构建出来的镜像名；要推到 Docker Hub 就在 .env 里设成 huyhdk/family-kanban:latest
-    image: "${IMAGE:-family-kanban:latest}"
+    image: "${IMAGE:-family-kanban:1.0.0}"
     container_name: family-kanban
     restart: unless-stopped
     # 让 PID 1 能正确回收子进程、转发 SIGTERM（Node 官方镜像不带 init）
