@@ -80,13 +80,25 @@ router.get('/ics', (req, res) => {
   const today = dayjs().format('YYYY-MM-DD')
   const end = dayjs().add(scope.days - 1, 'day').format('YYYY-MM-DD')
 
-  const rows = db
+  // 可选：只导出某几个成员的事项（memberId=a,b,c）
+  const memberIds = String(req.query.memberId || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  let rows = db
     .prepare(
       `SELECT t.* FROM todo t
        WHERE t.due_date BETWEEN ? AND ? AND t.status = 'pending'
        ORDER BY t.due_date ASC, CASE WHEN t.due_time IS NULL THEN 1 ELSE 0 END, t.due_time ASC;`
     )
     .all(today, end)
+
+  if (memberIds.length) {
+    const wanted = new Set(memberIds)
+    const stmt = db.prepare('SELECT member_id FROM todo_member WHERE todo_id = ?;')
+    rows = rows.filter((r) => stmt.all(r.id).some((x) => wanted.has(x.member_id)))
+  }
 
   const memberStmt = db.prepare(
     `SELECT m.name FROM todo_member tm JOIN member m ON m.id = tm.member_id

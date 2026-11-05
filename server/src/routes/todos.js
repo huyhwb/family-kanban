@@ -112,6 +112,12 @@ function shapeTodo(db, row) {
     memberAvatarPreset: first ? first.avatar_preset : null,
     memberAvatarFile: first ? first.avatar_file : null,
     status: row.status,
+    // 吃药类事项：关联药箱药品，完成时按用量扣库存
+    kind: row.kind || 'task',
+    medicineId: row.medicine_id || null,
+    doseCount: Number(row.dose_count) || 1,
+    doseUnit: row.dose_unit || null,
+    longTerm: Number(row.long_term) === 1,
     // 重复任务计次：今天已完成 doneCount / 需要 targetCount
     doneCount,
     targetCount,
@@ -475,8 +481,9 @@ router.post('/', (req, res) => {
     withTx(db, () => {
       db.prepare(
         `INSERT INTO todo
-          (id, title, note, due_date, due_time, end_time, quadrant, member_id, status, sort_order, done_at, done_count, target_count, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, 0, ?, ?, ?);`
+          (id, title, note, due_date, due_time, end_time, quadrant, member_id, status, sort_order, done_at, done_count, target_count,
+           kind, medicine_id, dose_count, dose_unit, long_term, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?);`
       ).run(
         id,
         title,
@@ -488,6 +495,11 @@ router.post('/', (req, res) => {
         memberIds[0] || null,
         (maxRow && maxRow.m ? maxRow.m : 0) + 1,
         targetCount,
+        body.kind === 'medicine' ? 'medicine' : 'task',
+        body.medicineId || null,
+        body.doseCount !== undefined ? Math.max(0, Number(body.doseCount) || 0) : 1,
+        body.doseUnit || null,
+        body.longTerm ? 1 : 0,
         ts,
         ts
       )
@@ -572,6 +584,25 @@ router.patch('/:id', (req, res) => {
         nowIso(),
         editId
       )
+      // 吃药类型相关字段（只在显式传入时改）
+      if (
+        body.kind !== undefined ||
+        body.medicineId !== undefined ||
+        body.doseCount !== undefined ||
+        body.doseUnit !== undefined ||
+        body.longTerm !== undefined
+      ) {
+        db.prepare(
+          `UPDATE todo SET kind = ?, medicine_id = ?, dose_count = ?, dose_unit = ?, long_term = ? WHERE id = ?;`
+        ).run(
+          body.kind === 'medicine' ? 'medicine' : 'task',
+          body.medicineId || null,
+          body.doseCount !== undefined ? Math.max(0, Number(body.doseCount) || 0) : 1,
+          body.doseUnit || null,
+          body.longTerm ? 1 : 0,
+          editId
+        )
+      }
       if (touchMembers) {
         setTodoMembers(db, editId, normalizeMemberIds(db, body))
       }

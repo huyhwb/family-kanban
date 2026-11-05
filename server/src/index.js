@@ -42,6 +42,7 @@ const { router: backupRouter } = require('./routes/backup')
 const { router: exportRouter } = require('./routes/export')
 const { router: medicinesRouter } = require('./routes/medicines')
 const { router: aiRouter } = require('./routes/ai')
+const { scheduleHolidaySync } = require('./services/holidaySync')
 
 /** 版本号以仓库根 package.json 为准；容器里同样拷贝了这份文件 */
 function readVersion() {
@@ -235,6 +236,7 @@ function lanAddresses() {
 
 const server = app.listen(PORT, HOST, () => {
   scheduler.startScheduler()
+  scheduleHolidaySync()
   console.log('')
   console.log('  家庭看板已启动')
   console.log(`  数据库驱动：${getDriverName()}`)

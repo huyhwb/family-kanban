@@ -130,21 +130,81 @@ function pickPhoto() {
   if (fileInput.value) fileInput.value.click()
 }
 
+/** 把图片画到 canvas，必要时缩放（zxing 对超大图反而更慢更差） */
+function drawToCanvas(img, maxSide = 1600) {
+  const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+  return canvas
+}
+
+async function decodePhoto(file) {
+  // 部分安卓机/iPad 会给出 HEIC，浏览器能画出来但 zxing 解不了，先挡掉
+  if (/heic|heif/i.test(file.type) || /\.heic$/i.test(file.name)) {
+    throw new Error('这张是 HEIC 格式，浏览器无法解析，请在相机设置里改成「兼容性最佳 / JPEG」再拍')
+  }
+
+  const url = URL.createObjectURL(file)
+  const img = new Image()
+  try {
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = () => reject(new Error('图片读取失败，换一张试试'))
+      img.src = url
+    })
+
+    const { BrowserMultiFormatReader } = await import('@zxing/browser')
+    const { DecodeHintType, BarcodeFormat } = await import('@zxing/library')
+    const hints = new Map([
+      [
+        DecodeHintType.POSSIBLE_FORMATS,
+        [
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39
+        ]
+      ],
+      [DecodeHintType.TRY_HARDER, true]
+    ])
+    const reader = new BrowserMultiFormatReader(hints)
+
+    // 先按缩略图解，失败再拿原分辨率试一次（条码通常很小）
+    const tries = [drawToCanvas(img, 1600), drawToCanvas(img, 3200)]
+    for (const canvas of tries) {
+      try {
+        const result = reader.decodeFromCanvas(canvas)
+        if (result) return result.getText()
+      } catch (err) {
+        /* 这一档没解出来，继续下一档 */
+      }
+    }
+    throw new Error('照片里没有找到条码，尽量让条码占满画面、避免反光')
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 async function onPhoto(e) {
   const file = e.target.files && e.target.files[0]
   e.target.value = ''
   if (!file) return
   decoding.value = true
+  error.value = ''
   status.value = '正在识别图片中的条码…'
   try {
-    const url = URL.createObjectURL(file)
-    const { BrowserMultiFormatReader } = await import('@zxing/browser')
-    const reader = new BrowserMultiFormatReader()
-    const result = await reader.decodeFromImageUrl(url)
-    URL.revokeObjectURL(url)
-    if (result) finish(result.getText())
+    const code = await decodePhoto(file)
+    status.value = ''
+    finish(code)
   } catch (err) {
-    toastError('图片里没有识别到条码，换个角度再拍一张')
+    status.value = ''
+    error.value = err.message || '识别失败'
+    toastError(error.value)
   } finally {
     decoding.value = false
   }

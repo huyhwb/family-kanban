@@ -14,6 +14,8 @@ const emit = defineEmits(['action', 'edit'])
 
 const board = useBoardStore()
 const menuOpen = ref(false)
+/** actions=编辑/删除；members=选谁完成 */
+const menuMode = ref('actions')
 const root = ref(null)
 
 const isDone = computed(() => props.todo.status !== 'pending')
@@ -48,13 +50,6 @@ const isPartial = computed(
 const countText = computed(() =>
   isMulti.value ? `${doneCount.value}/${targetCount.value}` : ''
 )
-
-const doneLabel = computed(() => {
-  if (!isMulti.value) return '完成事项'
-  return `完成一次（${doneCount.value}/${targetCount.value}）`
-})
-
-const restoreLabel = computed(() => (isMulti.value ? '撤销一次' : '恢复为未完成'))
 
 /** 多成员归属：优先用接口返回的 members，回退到主成员 */
 const memberList = computed(() => {
@@ -99,7 +94,30 @@ const dateText = computed(() => {
 
 function toggleMenu(e) {
   e.stopPropagation()
-  menuOpen.value = !menuOpen.value
+  if (menuOpen.value) {
+    menuOpen.value = false
+    return
+  }
+  menuMode.value = 'actions'
+  menuOpen.value = true
+}
+
+/**
+ * 点待办主体：
+ * - 单人/无成员：直接完成或撤回（可反复）
+ * - 多人：弹出「谁完成了」，逐个勾选
+ */
+function onBodyClick() {
+  if (menuOpen.value) {
+    menuOpen.value = false
+    return
+  }
+  if (isMultiMember.value && !allMembersDone.value) {
+    menuMode.value = 'members'
+    menuOpen.value = true
+    return
+  }
+  emit('action', isDone.value ? 'restore' : 'done', props.todo, null)
 }
 
 function pick(action, memberId = null) {
@@ -147,7 +165,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
     <Transition name="pop">
       <div v-if="menuOpen" class="todo__menu" @click.stop>
         <!-- 多人事项：按人分别勾选 -->
-        <template v-if="isMultiMember && !allMembersDone">
+        <template v-if="menuMode === 'members' && isMultiMember && !allMembersDone">
           <p class="todo__menu-tip">谁完成了？</p>
           <button
             v-for="m in memberList"
@@ -164,14 +182,6 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           </button>
         </template>
 
-        <button
-          v-else-if="!isDone"
-          class="todo__menu-item todo__menu-item--ok"
-          @click="pick('done')"
-        >
-          {{ doneLabel }}
-        </button>
-        <button v-else class="todo__menu-item" @click="pick('restore')">{{ restoreLabel }}</button>
         <button class="todo__menu-item" @click="pick('edit')">编辑</button>
         <button class="todo__menu-item todo__menu-item--danger" @click="pick('delete')">
           删除
@@ -179,8 +189,13 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
       </div>
     </Transition>
 
-    <div class="todo__main" @click="emit('edit', todo)">
+    <div
+      class="todo__main"
+      :title="isDone ? '点击撤回' : isMulti ? `点击完成第 ${doneCount + 1} 次` : '点击完成'"
+      @click="onBodyClick"
+    >
       <div class="todo__title">
+        <span v-if="todo.kind === 'medicine'" class="todo__pill">药</span>
         {{ todo.title }}
         <span v-if="todo.note" class="todo__note-mark" title="有备注">·</span>
       </div>
@@ -201,6 +216,9 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
             <path d="M4.8 9.7a1.3 1.3 0 0 0 2.4 0" stroke="currentColor" stroke-width="1" stroke-linecap="round" />
           </svg>
           {{ reminderText }}
+        </span>
+        <span v-if="todo.kind === 'medicine' && todo.doseCount" class="todo__tag todo__tag--dose">
+          每次 {{ todo.doseCount }}{{ todo.doseUnit || '' }}{{ todo.longTerm ? ' · 长期' : '' }}
         </span>
         <span v-if="memberList.length" class="todo__tag todo__tag--member">
           <span class="todo__avatars">
@@ -279,6 +297,23 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   min-width: 0;
 }
 
+.todo__pill {
+  display: inline-block;
+  margin-right: 0.3rem;
+  padding: 0 0.28rem;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--purple);
+  background: var(--purple-weak);
+  vertical-align: 1px;
+}
+
+.todo__tag--dose {
+  color: var(--purple);
+  background: var(--purple-weak);
+}
+
 .todo__title {
   font-size: 0.88rem;
   line-height: 1.35;
@@ -289,7 +324,24 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   color: var(--text-3);
 }
 
-.todo--done .todo__title {
+.todo--done .todo__pill {
+  display: inline-block;
+  margin-right: 0.3rem;
+  padding: 0 0.28rem;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--purple);
+  background: var(--purple-weak);
+  vertical-align: 1px;
+}
+
+.todo__tag--dose {
+  color: var(--purple);
+  background: var(--purple-weak);
+}
+
+.todo__title {
   color: var(--text-3);
   text-decoration: line-through;
 }

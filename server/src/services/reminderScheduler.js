@@ -1,6 +1,7 @@
 'use strict'
 
 const dayjs = require('dayjs')
+const { consumeByDose, refundDose } = require('./medicineStock')
 const cron = require('node-cron')
 const { Solar, Lunar } = require('lunar-javascript')
 const { getDb, withTx } = require('../db')
@@ -212,7 +213,17 @@ function materializeSeries(db, rule) {
     : db.prepare('SELECT * FROM todo WHERE id = ?;').get(rootId)
   if (!root) return { created: 0, pruned: 0 }
 
-  const dates = [...new Set(computeFireTimes(rule).map((f) => f.slice(0, 10)))]
+  // 长期服药不设结束：窗口跟着今天走，每天自动顺延一年
+  const effRule =
+    Number(root.long_term) === 1
+      ? {
+          ...rule,
+          start_date: dayjs().subtract(1, 'day').format(DAY),
+          duration_days: 365
+        }
+      : rule
+
+  const dates = [...new Set(computeFireTimes(effRule).map((f) => f.slice(0, 10)))]
   if (!dates.length) return { created: 0, pruned: 0 }
 
   const members = db
@@ -527,10 +538,12 @@ function recordCompletion(todoId, memberId = null) {
     const count = Math.max(0, Math.min(target, Number(todo.done_count) || 0))
     if (target > 1 && count + 1 < target) {
       db.prepare('UPDATE todo SET done_count = ?, updated_at = ? WHERE id = ?;').run(count + 1, ts, todoId)
+      deductDose(todoId, 1)
       return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
     }
     completeTodo(todoId, 'done')
     db.prepare('UPDATE todo SET done_count = ? WHERE id = ?;').run(target, todoId)
+    deductDose(todoId, 1)
     return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
   }
 
@@ -547,6 +560,7 @@ function recordCompletion(todoId, memberId = null) {
     'UPDATE todo_member SET done_count = ?, status = ?, done_at = ? WHERE todo_id = ? AND member_id = ?;'
   )
 
+  let doseTimes = 0
   withTx(db, () => {
     for (const row of picked) {
       const count = Math.max(0, Math.min(target, Number(row.done_count) || 0))
@@ -556,6 +570,7 @@ function recordCompletion(todoId, memberId = null) {
       }
       upd.run(target, 'done', ts, todoId, row.member_id)
       insLog.run(uid(), todoId, row.member_id, today, ts)
+      doseTimes += 1
     }
 
     const after = db
@@ -576,7 +591,40 @@ function recordCompletion(todoId, memberId = null) {
     }
   })
 
+  // 几个人各吃一次，就按几次扣库存
+  if (doseTimes > 0) deductDose(todoId, doseTimes)
+
   return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
+}
+
+/** 撤回时把这一次的用量补回库存 */
+function refundTodoDose(todoId, times = 1) {
+  const db = getDb()
+  const t = db.prepare('SELECT kind, medicine_id, dose_count FROM todo WHERE id = ?;').get(todoId)
+  if (!t || t.kind !== 'medicine' || !t.medicine_id) return null
+  const amount = (Number(t.dose_count) || 0) * times
+  if (amount <= 0) return null
+  try {
+    return refundDose(t.medicine_id, amount)
+  } catch (err) {
+    console.warn('[medicine] 回补库存失败：', err.message)
+    return null
+  }
+}
+
+/** 吃药类事项：完成一次就按「每次用量」扣药箱库存 */
+function deductDose(todoId, times = 1) {
+  const db = getDb()
+  const t = db.prepare('SELECT kind, medicine_id, dose_count FROM todo WHERE id = ?;').get(todoId)
+  if (!t || t.kind !== 'medicine' || !t.medicine_id) return null
+  const amount = (Number(t.dose_count) || 0) * times
+  if (amount <= 0) return null
+  try {
+    return consumeByDose(t.medicine_id, amount, null)
+  } catch (err) {
+    console.warn('[medicine] 扣库存失败：', err.message)
+    return null
+  }
 }
 
 /**
@@ -617,6 +665,7 @@ function undoCompletion(todoId, memberId = null) {
         .reduce((n, m) => Math.min(n, Number(m.done_count) || 0), target)
       db.prepare("UPDATE todo SET status = 'pending', done_at = NULL, done_count = ?, updated_at = ? WHERE id = ?;").run(least, ts, todoId)
     })
+    refundTodoDose(todoId, 1)
     return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
   }
 
@@ -639,6 +688,8 @@ function undoCompletion(todoId, memberId = null) {
       ).run(todoId)
     }
   })
+  // 撤回一次就补回一份库存，和完成时对称
+  refundTodoDose(todoId, 1)
   return db.prepare('SELECT * FROM todo WHERE id = ?;').get(todoId)
 }
 

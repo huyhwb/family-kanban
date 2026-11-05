@@ -61,6 +61,12 @@ const form = reactive({
   memberIds: [],
   quadrant: null,
   note: '',
+  // 吃药类事项
+  kind: 'task',
+  medicineId: '',
+  doseCount: 1,
+  doseUnit: '片',
+  longTerm: false,
   reminderEnabled: false,
   startTime: '08:00',
   // 系列副本编辑时要用"根的起始日"，否则会把整个计划挪到当天
@@ -75,6 +81,41 @@ const form = reactive({
 })
 
 const phrases = ref([])
+const medicineOptions = ref([])
+const LOOSE_UNITS = ['片', '粒', '袋', '支', '包', 'ml', 'g']
+
+async function loadMedicines() {
+  try {
+    medicineOptions.value = await api.medicines.list({})
+  } catch (err) {
+    medicineOptions.value = []
+  }
+}
+
+/** 切成吃药事项：自动打开提醒，按天重复 */
+function pickKindMedicine() {
+  form.kind = 'medicine'
+  form.quadrant = null
+  form.reminderEnabled = true
+  if (form.pattern === 'yearly') form.pattern = 'daily'
+  if (!medicineOptions.value.length) loadMedicines()
+}
+
+function onPickMedicine() {
+  const m = medicineOptions.value.find((x) => x.id === form.medicineId)
+  if (!m) return
+  if (!form.title.trim()) form.title = `吃${m.name}`
+  if (m.looseUnit) form.doseUnit = m.looseUnit
+}
+
+function toggleLongTerm() {
+  form.longTerm = !form.longTerm
+  if (form.longTerm) {
+    form.reminderEnabled = true
+    form.pattern = 'daily'
+    form.durationDays = 365
+  }
+}
 const saving = ref(false)
 const errorMsg = ref('')
 const reminderEl = ref(null)
@@ -139,6 +180,11 @@ function resetForm() {
         : []
     form.quadrant = t.quadrant ?? null
     form.note = t.note || ''
+    form.kind = t.kind === 'medicine' ? 'medicine' : 'task'
+    form.medicineId = t.medicineId || ''
+    form.doseCount = Number(t.doseCount) || 1
+    form.doseUnit = t.doseUnit || '片'
+    form.longTerm = !!t.longTerm
     if (t.reminder) {
       form.reminderEnabled = !!t.reminder.enabled
       form.startTime = t.reminder.startTime || d.startTime
@@ -421,13 +467,23 @@ async function submit() {
     memberId: form.memberIds[0] || null,
     quadrant: form.quadrant,
     note: form.note.trim() || null,
+    kind: form.kind,
+    medicineId: form.kind === 'medicine' ? form.medicineId || null : null,
+    doseCount: form.kind === 'medicine' ? Number(form.doseCount) || 0 : 0,
+    doseUnit: form.kind === 'medicine' ? form.doseUnit : null,
+    longTerm: form.kind === 'medicine' ? !!form.longTerm : false,
     reminder: form.reminderEnabled
       ? {
           startDate: isSeriesDay.value ? form.reminderStartDate || form.dueDate : form.dueDate,
           startTime: form.startTime,
           timesPerDay: form.pattern === 'yearly' ? 1 : Number(form.timesPerDay) || 1,
           intervalHours: Number(form.intervalHours) || 8,
-          durationDays: form.pattern === 'yearly' ? 1 : Number(form.durationDays) || 1,
+          durationDays:
+            form.pattern === 'yearly'
+              ? 1
+              : form.kind === 'medicine' && form.longTerm
+                ? 365
+                : Number(form.durationDays) || 1,
           pattern: form.pattern,
           yearlyKind: form.pattern === 'yearly' ? form.yearlyKind : 'solar',
           weekdays: form.pattern === 'weekly' ? [...form.weekdays] : [],
@@ -547,6 +603,64 @@ const members = computed(() => board.members)
                   <span v-if="form.memberIds.includes(m.id)" class="ed__member-tick">✓</span>
                 </button>
               </div>
+            </div>
+
+            <div class="ed__field">
+              <span class="ed__label">类型</span>
+              <div class="ed__chips">
+                <button
+                  class="chip"
+                  :class="{ 'chip--active': form.kind === 'task' }"
+                  @click="form.kind = 'task'"
+                >
+                  普通事项
+                </button>
+                <button
+                  class="chip"
+                  :class="{ 'chip--active': form.kind === 'medicine' }"
+                  @click="pickKindMedicine"
+                >
+                  吃药
+                </button>
+              </div>
+            </div>
+
+            <div v-if="form.kind === 'medicine'" class="ed__medbox">
+              <label class="ed__field">
+                <span class="ed__label">关联药品</span>
+                <select v-model="form.medicineId" class="field" @change="onPickMedicine">
+                  <option value="">从药箱选择药品</option>
+                  <option v-for="m in medicineOptions" :key="m.id" :value="m.id">
+                    {{ m.name }}（剩 {{ m.amountText }}）
+                  </option>
+                </select>
+              </label>
+
+              <div class="ed__row">
+                <label class="ed__field">
+                  <span class="ed__label">每次用量</span>
+                  <div class="ed__dose">
+                    <input v-model.number="form.doseCount" type="number" min="0" step="0.5" class="field" />
+                    <select v-model="form.doseUnit" class="field">
+                      <option v-for="u in LOOSE_UNITS" :key="u" :value="u">{{ u }}</option>
+                    </select>
+                  </div>
+                </label>
+                <label class="ed__field ed__field--check">
+                  <span class="ed__label">长期服药</span>
+                  <button
+                    class="switch"
+                    :class="{ 'switch--on': form.longTerm }"
+                    @click="toggleLongTerm"
+                  />
+                </label>
+              </div>
+              <p class="ed__medhint">
+                {{ form.longTerm
+                  ? '长期服药：不设结束日期，每天自动顺延；库存不足两周时会提醒补药。'
+                  : '普通疗程：持续天数沿用下方「持续天数」，库存不够吃完整个疗程时会提醒。'
+                }}
+              </p>
             </div>
 
             <div v-if="!isYearly" class="ed__field">
@@ -697,8 +811,8 @@ const members = computed(() => board.members)
                   </label>
                 </div>
 
-                <!-- 持续天数 -->
-                <div v-if="form.pattern !== 'yearly'" class="ed__field">
+                <!-- 持续天数（长期服药不设结束） -->
+                <div v-if="form.pattern !== 'yearly' && !(form.kind === 'medicine' && form.longTerm)" class="ed__field">
                   <div class="ed__label-row">
                     <span class="ed__label">持续天数</span>
                     <span class="ed__label-hint ed__quick">
@@ -765,6 +879,43 @@ const members = computed(() => board.members)
 </template>
 
 <style scoped>
+/* 吃药事项区块 */
+.ed__medbox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+}
+
+.ed__dose {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.ed__dose .field:first-child {
+  width: 4.5rem;
+  flex: none;
+  text-align: center;
+}
+
+.ed__dose select {
+  width: 4rem;
+  flex: none;
+}
+
+.ed__field--check {
+  align-items: flex-start;
+}
+
+.ed__medhint {
+  font-size: 0.66rem;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
 .ed {
   position: fixed;
   inset: 0;

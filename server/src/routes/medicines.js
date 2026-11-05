@@ -2,7 +2,8 @@
 
 const express = require('express')
 const dayjs = require('dayjs')
-const { getDb, getSettings } = require('../db')
+const { getDb, getSettings, withTx } = require('../db')
+const { syncTotals, takeFromBatches, batchList } = require('../services/medicineStock')
 const { uid, nowIso } = require('../lib/util')
 
 const router = express.Router()
@@ -30,6 +31,7 @@ function text(v, max = 200) {
 function isDate(v) {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && dayjs(v).isValid()
 }
+
 
 /** 剩余量文案：整件 + 散装，缺一项就只说一项 */
 function amountText(packCount, packUnit, looseCount, looseUnit) {
@@ -61,7 +63,10 @@ function shape(row) {
     id: row.id,
     brand: row.brand || '',
     name: row.name,
-    spec: row.spec || '',
+    // 规格两栏：整包规格（必填）+ 小包装规格（选填）
+    packSpec: row.pack_spec || row.spec || '',
+    unitSpec: row.unit_spec || '',
+    spec: row.pack_spec || row.spec || '',
     expiryDate: row.expiry_date || null,
     manufacturer: row.manufacturer || '',
     // 整件 + 散装两栏
@@ -92,7 +97,7 @@ router.get('/', (req, res) => {
   if (q) {
     const kw = q.toLowerCase()
     rows = rows.filter((m) =>
-      [m.brand, m.name, m.spec, m.manufacturer, m.barcode, m.note]
+      [m.brand, m.name, m.packSpec, m.unitSpec, m.manufacturer, m.barcode, m.note]
         .join(' ')
         .toLowerCase()
         .includes(kw)
@@ -126,6 +131,147 @@ router.get('/stats', (req, res) => {
   })
 })
 
+/**
+ * 按条码查药品信息。
+ * 默认用 OpenFoodFacts（免费、免 key，能查到部分进口药与保健品的品名与规格）；
+ * 想接自有/付费条码库，在设置里填 medicine.barcodeApi（含 {barcode} 占位）与可选的 medicine.barcodeApiKey。
+ */
+router.get('/lookup', async (req, res) => {
+  const barcode = String(req.query.barcode || '').trim()
+  if (!/^\d{6,14}$/.test(barcode)) {
+    return res.status(400).json({ error: '条码格式不对，应为 6~14 位数字' })
+  }
+
+  const settings = getSettings()
+  const tpl = String(settings['medicine.barcodeApi'] || '').trim()
+  const key = String(settings['medicine.barcodeApiKey'] || '').trim()
+
+  const url = tpl
+    ? tpl.replace(/\{barcode\}/g, encodeURIComponent(barcode))
+    : `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+
+  try {
+    const resp = await fetch(url, {
+      headers: key ? { Authorization: key.startsWith('Bearer ') ? key : `Bearer ${key}` } : {},
+      signal: controller.signal
+    })
+    const text = await resp.text()
+    // OpenFoodFacts 对未收录的条码直接返回 404，这不是"查询出错"，而是"没这个商品"
+    if (resp.status === 404) {
+      return res.status(404).json({ error: '条码库没有收录这个药品' })
+    }
+    if (!resp.ok) {
+      return res.status(502).json({ error: `条码库返回 ${resp.status}` })
+    }
+    let data = null
+    try {
+      data = JSON.parse(text)
+    } catch (err) {
+      return res.status(502).json({ error: '条码库返回的不是 JSON' })
+    }
+
+    // 自定义接口：假定直接给出 {name, brand, spec} 或嵌在 data 里
+    const found = tpl
+      ? toFields(data.data || data)
+      : data.status === 1 && data.product
+        ? toFields(data.product)
+        : null
+
+    if (!found || !found.name) {
+      return res.status(404).json({ error: '条码库里没有这个药品，手动填一下吧' })
+    }
+    res.json({ ok: true, data: found })
+  } catch (err) {
+    if (err.name === 'AbortError') return res.status(504).json({ error: '查询条码超时' })
+    res.status(502).json({ error: `查询失败：${err.message}` })
+  } finally {
+    clearTimeout(timer)
+  }
+})
+
+/** 把不同条码库的字段统一成 name / brand / packSpec */
+function toFields(src) {
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = src[k]
+      if (v !== undefined && v !== null && String(v).trim()) return String(v).trim()
+    }
+    return ''
+  }
+  const qty = pick('quantity', 'spec', 'size')
+  return {
+    name: pick('name', 'product_name', 'productName', 'goodsName', 'goods_name'),
+    brand: pick('brand', 'brands', 'brandName', 'manuName'),
+    packSpec: qty ? (qty.includes('/') ? qty : `${qty}`) : '',
+    manufacturer: pick('manufacturer', 'manuName', 'factory', 'producer')
+  }
+}
+
+/**
+ * 用药预警：
+ * - 长期服药（long_term=1）：剩余不足 14 天
+ * - 短期：剩余量撑不到所选周期结束
+ */
+router.get('/alerts', (req, res) => {
+  const db = getDb()
+  const { perPackOf, availableInLoose } = require('../services/medicineStock')
+
+  const todos = db
+    .prepare(
+      `SELECT t.id, t.title, t.medicine_id, t.dose_count, t.dose_unit, t.long_term, t.target_count,
+              r.duration_days
+         FROM todo t
+         LEFT JOIN reminder_rule r ON r.todo_id = t.id
+        WHERE t.kind = 'medicine' AND t.status = 'pending' AND t.medicine_id IS NOT NULL;`
+    )
+    .all()
+
+  const alerts = []
+  const seen = new Set()
+  for (const t of todos) {
+    const med = db.prepare('SELECT * FROM medicine WHERE id = ?;').get(t.medicine_id)
+    if (!med) continue
+
+    const perPack = perPackOf(med.pack_spec, med.loose_unit)
+    const available = availableInLoose(med, perPack)
+    const perTime = Number(t.dose_count) || 0
+    const timesPerDay = Math.max(1, Number(t.target_count) || 1)
+    const daily = perTime * timesPerDay
+    if (daily <= 0) continue
+
+    const days = available / daily
+    const longTerm = Number(t.long_term) === 1
+    const cycleDays = Math.max(1, Number(t.duration_days) || 1)
+
+    if (longTerm && days < 14) {
+      alerts.push({
+        type: 'long',
+        medicineId: med.id,
+        name: med.name,
+        todoId: t.id,
+        daysLeft: Math.floor(days),
+        message: `长期服药「${med.name}」只够 ${Math.floor(days)} 天，不足两周`
+      })
+    } else if (!longTerm && available < daily * cycleDays) {
+      alerts.push({
+        type: 'short',
+        medicineId: med.id,
+        name: med.name,
+        todoId: t.id,
+        need: Math.ceil(daily * cycleDays - available),
+        cycleDays,
+        message: `「${med.name}」剩量不够吃完这 ${cycleDays} 天，还差约 ${Math.ceil(daily * cycleDays - available)} ${med.loose_unit || '份'}`
+      })
+    }
+    seen.add(med.id)
+  }
+
+  res.json(alerts)
+})
+
 router.get('/units', (req, res) => {
   res.json({ pack: UNITS, loose: LOOSE_UNITS })
 })
@@ -134,7 +280,9 @@ router.get('/:id', (req, res) => {
   const db = getDb()
   const row = db.prepare('SELECT * FROM medicine WHERE id = ?;').get(req.params.id)
   if (!row) return res.status(404).json({ error: '药品不存在' })
-  res.json(shape(row))
+  const out = shape(row)
+  out.batches = batchList(db, req.params.id)
+  res.json(out)
 })
 
 /** 从 body 里取「整件 + 散装」，兼容老的 quantity / unit */
@@ -157,6 +305,9 @@ router.post('/', (req, res) => {
   const body = req.body || {}
   const name = text(body.name, 80)
   if (!name) return res.status(400).json({ error: '药品名不能为空' })
+  if (!text(body.packSpec ?? body.spec, 60)) {
+    return res.status(400).json({ error: '每盒（瓶/罐）的规格不能为空' })
+  }
 
   const id = uid()
   const ts = nowIso()
@@ -165,14 +316,16 @@ router.post('/', (req, res) => {
 
   db.prepare(
     `INSERT INTO medicine
-       (id, brand, name, spec, expiry_date, manufacturer, quantity, unit,
+       (id, brand, name, spec, pack_spec, unit_spec, expiry_date, manufacturer, quantity, unit,
         pack_count, pack_unit, loose_count, loose_unit, barcode, note, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
   ).run(
     id,
     text(body.brand, 40),
     name,
-    text(body.spec, 60),
+    text(body.packSpec ?? body.spec, 60),
+    text(body.packSpec ?? body.spec, 60),
+    text(body.unitSpec, 60),
     expiry,
     text(body.manufacturer, 80),
     amount.packCount,
@@ -186,6 +339,11 @@ router.post('/', (req, res) => {
     ts,
     ts
   )
+
+  // 首笔库存进批次表，后续增减都以批次为准
+  db.prepare(
+    'INSERT INTO medicine_batch (id, medicine_id, pack_count, loose_count, expiry_date, created_at) VALUES (?, ?, ?, ?, ?, ?);'
+  ).run(uid(), id, amount.packCount, amount.looseCount, expiry, ts)
 
   res.status(201).json(shape(db.prepare('SELECT * FROM medicine WHERE id = ?;').get(id)))
 })
@@ -205,7 +363,11 @@ router.patch('/:id', (req, res) => {
   const next = {
     brand: body.brand !== undefined ? text(body.brand, 40) : row.brand,
     name: body.name !== undefined ? text(body.name, 80) : row.name,
-    spec: body.spec !== undefined ? text(body.spec, 60) : row.spec,
+    pack_spec:
+      body.packSpec !== undefined || body.spec !== undefined
+        ? text(body.packSpec ?? body.spec, 60)
+        : row.pack_spec,
+    unit_spec: body.unitSpec !== undefined ? text(body.unitSpec, 60) : row.unit_spec,
     expiry_date:
       body.expiryDate !== undefined ? (isDate(body.expiryDate) ? body.expiryDate : null) : row.expiry_date,
     manufacturer: body.manufacturer !== undefined ? text(body.manufacturer, 80) : row.manufacturer,
@@ -213,30 +375,70 @@ router.patch('/:id', (req, res) => {
     note: body.note !== undefined ? text(body.note, 500) : row.note
   }
   if (!next.name) return res.status(400).json({ error: '药品名不能为空' })
+  if (!next.pack_spec) return res.status(400).json({ error: '每盒（瓶/罐）的规格不能为空' })
 
   db.prepare(
     `UPDATE medicine
-     SET brand = ?, name = ?, spec = ?, expiry_date = ?, manufacturer = ?,
-         quantity = ?, unit = ?, pack_count = ?, pack_unit = ?, loose_count = ?, loose_unit = ?,
-         barcode = ?, note = ?, updated_at = ?
+     SET brand = ?, name = ?, spec = ?, pack_spec = ?, unit_spec = ?, expiry_date = ?, manufacturer = ?,
+         unit = ?, pack_unit = ?, loose_unit = ?, barcode = ?, note = ?, updated_at = ?
      WHERE id = ?;`
   ).run(
     next.brand,
     next.name,
-    next.spec,
+    next.pack_spec,
+    next.pack_spec,
+    next.unit_spec,
     next.expiry_date,
     next.manufacturer,
-    amount.packCount,
     amount.packUnit,
-    amount.packCount,
     amount.packUnit,
-    amount.looseCount,
     amount.looseUnit,
     next.barcode,
     next.note,
     nowIso(),
     req.params.id
   )
+
+  // 数量改动按「校正总量」处理：多了补进最早批次，少了从最早批次扣
+  const oldPack = num(row.pack_count)
+  const oldLoose = num(row.loose_count)
+  const dPack = amount.packCount - oldPack
+  const dLoose = amount.looseCount - oldLoose
+  if (dPack > 0 || dLoose > 0) {
+    const first = db
+      .prepare(
+        `SELECT * FROM medicine_batch WHERE medicine_id = ?
+         ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date ASC, created_at ASC LIMIT 1;`
+      )
+      .get(req.params.id)
+    if (first) {
+      db.prepare('UPDATE medicine_batch SET pack_count = ?, loose_count = ? WHERE id = ?;').run(
+        num(first.pack_count) + Math.max(0, dPack),
+        num(first.loose_count) + Math.max(0, dLoose),
+        first.id
+      )
+    } else {
+      db.prepare(
+        'INSERT INTO medicine_batch (id, medicine_id, pack_count, loose_count, expiry_date, created_at) VALUES (?, ?, ?, ?, ?, ?);'
+      ).run(uid(), req.params.id, Math.max(0, dPack), Math.max(0, dLoose), next.expiry_date, nowIso())
+    }
+  }
+  if (dPack < 0 || dLoose < 0) {
+    takeFromBatches(db, req.params.id, Math.max(0, -dPack), Math.max(0, -dLoose))
+  }
+  // 编辑时改的有效期，落到最早那批
+  if (body.expiryDate !== undefined) {
+    const first = db
+      .prepare(
+        `SELECT id FROM medicine_batch WHERE medicine_id = ?
+         ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date ASC, created_at ASC LIMIT 1;`
+      )
+      .get(req.params.id)
+    if (first) {
+      db.prepare('UPDATE medicine_batch SET expiry_date = ? WHERE id = ?;').run(next.expiry_date, first.id)
+    }
+  }
+  syncTotals(db, req.params.id)
 
   res.json(shape(db.prepare('SELECT * FROM medicine WHERE id = ?;').get(req.params.id)))
 })
@@ -252,34 +454,102 @@ router.post('/:id/adjust', (req, res) => {
   if (!row) return res.status(404).json({ error: '药品不存在' })
 
   const body = req.body || {}
-  let pack = num(row.pack_count)
-  let loose = num(row.loose_count)
+  let addPack = 0
+  let addLoose = 0
+  let usePack = 0
+  let useLoose = 0
 
   if (body.packDelta !== undefined || body.looseDelta !== undefined) {
-    pack = Math.max(0, pack + num(body.packDelta))
-    loose = Math.max(0, loose + num(body.looseDelta))
+    const p = num(body.packDelta)
+    const l = num(body.looseDelta)
+    if (p >= 0) addPack = p
+    else usePack = -p
+    if (l >= 0) addLoose = l
+    else useLoose = -l
   } else {
     const delta = num(body.delta)
-    if (delta >= 0) {
-      pack += delta
+    if (delta >= 0) addPack = delta
+    else useLoose = -delta // 先扣散装，扣完再扣整件（下面 takeFromBatches 会处理）
+  }
+
+  if (addPack > 0 || addLoose > 0) {
+    // 补货并到最早批次里，不新开一批
+    const first = db
+      .prepare(
+        `SELECT * FROM medicine_batch WHERE medicine_id = ?
+         ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date ASC, created_at ASC LIMIT 1;`
+      )
+      .get(req.params.id)
+    if (first) {
+      db.prepare('UPDATE medicine_batch SET pack_count = ?, loose_count = ? WHERE id = ?;').run(
+        num(first.pack_count) + addPack,
+        num(first.loose_count) + addLoose,
+        first.id
+      )
     } else {
-      let left = -delta
-      const useLoose = Math.min(loose, left)
-      loose -= useLoose
-      left -= useLoose
-      pack = Math.max(0, pack - left)
+      db.prepare(
+        'INSERT INTO medicine_batch (id, medicine_id, pack_count, loose_count, expiry_date, created_at) VALUES (?, ?, ?, ?, ?, ?);'
+      ).run(uid(), req.params.id, addPack, addLoose, row.expiry_date, nowIso())
     }
   }
 
-  db.prepare(
-    'UPDATE medicine SET pack_count = ?, loose_count = ?, quantity = ?, updated_at = ? WHERE id = ?;'
-  ).run(pack, loose, pack, nowIso(), req.params.id)
+  if (useLoose > 0 || usePack > 0) {
+    // 散装不够时，用整件继续抵
+    let looseNeed = useLoose
+    let packNeed = usePack
+    // 散装不够就用整件顶上：一盒都没拆时点「−」= 用掉一盒
+    if (looseNeed > 0) {
+      const looseTotal = num(row.loose_count)
+      if (looseNeed > looseTotal) {
+        packNeed += looseNeed - looseTotal
+        looseNeed = looseTotal
+      }
+    }
+    takeFromBatches(db, req.params.id, packNeed, looseNeed)
+  }
 
+  syncTotals(db, req.params.id)
   res.json(shape(db.prepare('SELECT * FROM medicine WHERE id = ?;').get(req.params.id)))
 })
 
+/**
+ * 入库：可以一次录多批，每批单独有效期；也可以统一有效期。
+ * body: { batches: [{ packCount, looseCount, expiryDate }] }
+ */
+router.post('/:id/stock-in', (req, res) => {
+  const db = getDb()
+  const row = db.prepare('SELECT * FROM medicine WHERE id = ?;').get(req.params.id)
+  if (!row) return res.status(404).json({ error: '药品不存在' })
+
+  const list = Array.isArray(req.body && req.body.batches) ? req.body.batches : []
+  const clean = list
+    .map((b) => ({
+      packCount: Math.max(0, num(b.packCount)),
+      looseCount: Math.max(0, num(b.looseCount)),
+      expiryDate: isDate(b.expiryDate) ? b.expiryDate : null
+    }))
+    .filter((b) => b.packCount > 0 || b.looseCount > 0)
+
+  if (!clean.length) return res.status(400).json({ error: '请至少录入一批数量' })
+
+  const ins = db.prepare(
+    'INSERT INTO medicine_batch (id, medicine_id, pack_count, loose_count, expiry_date, created_at) VALUES (?, ?, ?, ?, ?, ?);'
+  )
+  withTx(db, () => {
+    for (const b of clean) ins.run(uid(), req.params.id, b.packCount, b.looseCount, b.expiryDate, nowIso())
+    syncTotals(db, req.params.id)
+  })
+
+  const shaped = shape(db.prepare('SELECT * FROM medicine WHERE id = ?;').get(req.params.id))
+  shaped.batches = batchList(db, req.params.id)
+  res.json(shaped)
+})
+
+
+
 router.delete('/:id', (req, res) => {
   const db = getDb()
+  db.prepare('DELETE FROM medicine_batch WHERE medicine_id = ?;').run(req.params.id)
   const info = db.prepare('DELETE FROM medicine WHERE id = ?;').run(req.params.id)
   if (!info.changes) return res.status(404).json({ error: '药品不存在' })
   res.json({ ok: true })

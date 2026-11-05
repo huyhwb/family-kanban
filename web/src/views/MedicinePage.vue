@@ -1,9 +1,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import api from '../api/client'
 import { useMedicineStore } from '../stores/medicine'
 import MedicineEditor from '../components/MedicineEditor.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
-import { toastError } from '../lib/toast'
+import { toastError, toastOk } from '../lib/toast'
 
 const emit = defineEmits(['back'])
 
@@ -20,6 +21,62 @@ const keyword = ref('')
 const editorOpen = ref(false)
 const editorItem = ref(null)
 const pendingDelete = ref(null)
+
+/* ---- 入库：支持统一有效期或多批分别录 ---- */
+const stockItem = ref(null)
+const stockMode = ref('single')
+const stockSaving = ref(false)
+const stockBatches = ref([])
+
+function blankBatch(expiry = '') {
+  return { packCount: 1, looseCount: 0, expiryDate: expiry }
+}
+
+function openStock(m) {
+  stockItem.value = m
+  stockMode.value = 'single'
+  stockBatches.value = [blankBatch(m.expiryDate || '')]
+}
+
+function addBatch() {
+  const last = stockBatches.value[stockBatches.value.length - 1]
+  stockBatches.value.push(blankBatch(last ? last.expiryDate : ''))
+}
+
+function removeBatch(i) {
+  stockBatches.value.splice(i, 1)
+}
+
+function switchStockMode(mode) {
+  stockMode.value = mode
+  const first = stockBatches.value[0] || blankBatch()
+  stockBatches.value =
+    mode === 'single' ? [first] : [first, blankBatch(first.expiryDate)]
+}
+
+async function submitStock() {
+  const m = stockItem.value
+  if (!m || stockSaving.value) return
+  const batches =
+    stockMode.value === 'single'
+      ? [stockBatches.value[0]].filter((b) => b.packCount > 0 || b.looseCount > 0)
+      : stockBatches.value.filter((b) => b.packCount > 0 || b.looseCount > 0)
+  if (!batches.length) {
+    toastError('请至少填一批数量')
+    return
+  }
+  stockSaving.value = true
+  try {
+    await api.medicines.stockIn(m.id, batches)
+    await store.load({ silent: true })
+    toastOk(`「${m.name}」已入库`)
+    stockItem.value = null
+  } catch (err) {
+    toastError(err.message)
+  } finally {
+    stockSaving.value = false
+  }
+}
 
 let searchTimer = null
 function onSearch() {
@@ -65,7 +122,20 @@ const statCards = computed(() => [
   { key: 'empty', name: '已用完', value: store.stats.empty, tone: 'gray' }
 ])
 
-onMounted(() => store.load())
+const alerts = ref([])
+
+async function loadAlerts() {
+  try {
+    alerts.value = await api.medicines.alerts()
+  } catch (err) {
+    alerts.value = []
+  }
+}
+
+onMounted(async () => {
+  await store.load()
+  loadAlerts()
+})
 </script>
 
 <template>
@@ -110,6 +180,14 @@ onMounted(() => store.load())
       <span class="med__count">{{ store.items.length }} 条</span>
     </div>
 
+    <div v-if="alerts.length" class="malert">
+      <span class="malert__icon">!</span>
+      <div class="malert__items scroll-y">
+        <p v-for="(a, i) in alerts" :key="i" class="malert__item">{{ a.message }}</p>
+      </div>
+      <button class="malert__close" title="暂时收起" @click="alerts = []">✕</button>
+    </div>
+
     <div class="med__list scroll-y">
       <div v-for="m in store.items" :key="m.id" class="mrow" :class="`mrow--${m.status}`">
         <div class="mrow__pool">
@@ -118,9 +196,10 @@ onMounted(() => store.load())
             <span v-if="m.brand" class="mrow__brand">{{ m.brand }}</span>
           </div>
           <div class="mrow__meta">
-            <span v-if="m.spec">{{ m.spec }}</span>
+            <span v-if="m.packSpec">{{ m.packSpec }}</span>
+            <span v-if="m.unitSpec" class="mrow__unitspec">{{ m.unitSpec }}</span>
             <span v-if="m.manufacturer" class="mrow__maker">{{ m.manufacturer }}</span>
-            <span v-if="!m.spec && !m.manufacturer" class="mrow__muted">未填规格与厂家</span>
+            <span v-if="!m.packSpec && !m.manufacturer" class="mrow__muted">未填规格与厂家</span>
           </div>
         </div>
 
@@ -143,6 +222,7 @@ onMounted(() => store.load())
         </div>
 
         <div class="mrow__ops">
+          <button class="mop mop--in" @click="openStock(m)">入库</button>
           <button class="mop" @click="openEditor(m)">编辑</button>
           <button class="mop mop--danger" @click="pendingDelete = m">删除</button>
         </div>
@@ -163,6 +243,70 @@ onMounted(() => store.load())
         </button>
       </div>
     </div>
+
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="stockItem" class="sin" @click.self="stockItem = null">
+          <div class="sin__card">
+            <header class="sin__head">
+              <h3>入库 · {{ stockItem.name }}</h3>
+              <button class="sin__close" @click="stockItem = null">✕</button>
+            </header>
+
+            <div class="sin__modes">
+              <button
+                class="sin__mode"
+                :class="{ 'sin__mode--on': stockMode === 'single' }"
+                @click="switchStockMode('single')"
+              >
+                统一有效期
+              </button>
+              <button
+                class="sin__mode"
+                :class="{ 'sin__mode--on': stockMode === 'multi' }"
+                @click="switchStockMode('multi')"
+              >
+                分批录入
+              </button>
+            </div>
+
+            <div class="sin__body scroll-y">
+              <div v-for="(b, i) in stockBatches" :key="i" class="sin__row">
+                <div class="sin__qty">
+                  <input v-model.number="b.packCount" type="number" min="0" step="1" class="field sin__num" />
+                  <span class="sin__unit">{{ stockItem.packUnit }}</span>
+                  <input v-model.number="b.looseCount" type="number" min="0" step="1" class="field sin__num" />
+                  <span class="sin__unit">{{ stockItem.looseUnit }}</span>
+                </div>
+                <input v-model="b.expiryDate" type="date" class="field sin__date" />
+                <button
+                  v-if="stockMode === 'multi' && stockBatches.length > 1"
+                  class="sin__del"
+                  @click="removeBatch(i)"
+                >
+                  删除
+                </button>
+              </div>
+
+              <button v-if="stockMode === 'multi'" class="sin__add" @click="addBatch">
+                ＋ 再加一批
+              </button>
+
+              <p class="sin__tip">
+                库存耗尽后不会删除药品；下次入库只增加数量并更新有效期，历史批次保留。
+              </p>
+            </div>
+
+            <footer class="sin__foot">
+              <button class="btn btn--sm" @click="stockItem = null">取消</button>
+              <button class="btn btn--primary btn--sm" :disabled="stockSaving" @click="submitStock">
+                {{ stockSaving ? '入库中…' : '确认入库' }}
+              </button>
+            </footer>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <MedicineEditor v-model:open="editorOpen" :item="editorItem" @saved="store.load()" />
 
@@ -250,6 +394,51 @@ onMounted(() => store.load())
 
 .med__add:hover {
   background: var(--primary-hover);
+}
+
+/* 用药预警 */
+.malert {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: var(--r-md);
+  background: var(--amber-weak);
+  border: 1px solid var(--amber);
+  flex: none;
+}
+
+.malert__icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--amber);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.malert__items {
+  flex: 1;
+  min-width: 0;
+  max-height: 3.4rem;
+  overflow-y: auto;
+}
+
+.malert__item {
+  font-size: 0.72rem;
+  color: var(--amber);
+  line-height: 1.6;
+}
+
+.malert__close {
+  flex: none;
+  color: var(--amber);
+  font-size: 0.8rem;
+  opacity: 0.7;
 }
 
 /* 统计卡 */
@@ -393,6 +582,14 @@ onMounted(() => store.load())
   min-width: 0;
 }
 
+.mrow__unitspec {
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  background: var(--panel-3);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
 .mrow__maker {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -492,9 +689,147 @@ onMounted(() => store.load())
   color: var(--text);
 }
 
+.mop--in {
+  color: var(--green);
+}
+
+.mop--in:hover {
+  background: var(--green-weak);
+  color: var(--green);
+}
+
 .mop--danger:hover {
   background: var(--red-weak);
   color: var(--red);
+}
+
+/* 入库弹层 */
+.sin {
+  position: fixed;
+  inset: 0;
+  z-index: 830;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 0.8rem;
+}
+
+.sin__card {
+  width: min(30rem, var(--stage-w, 100%));
+  max-height: 88%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.sin__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 1rem 0.5rem;
+}
+
+.sin__head h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.sin__close {
+  color: var(--text-3);
+  font-size: 0.9rem;
+}
+
+.sin__modes {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0 1rem 0.6rem;
+}
+
+.sin__mode {
+  flex: 1;
+  padding: 0.35rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  font-size: 0.74rem;
+  color: var(--text-2);
+  background: var(--panel-2);
+}
+
+.sin__mode--on {
+  background: var(--primary-weak);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.sin__body {
+  padding: 0 1rem 0.5rem;
+  overflow-y: auto;
+}
+
+.sin__row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.4rem;
+}
+
+.sin__qty {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.sin__num {
+  width: 3.2rem;
+  text-align: center;
+}
+
+.sin__unit {
+  font-size: 0.68rem;
+  color: var(--text-3);
+}
+
+.sin__date {
+  flex: 1;
+  min-width: 0;
+}
+
+.sin__del {
+  font-size: 0.68rem;
+  color: var(--text-3);
+}
+
+.sin__del:hover {
+  color: var(--red);
+}
+
+.sin__add {
+  width: 100%;
+  padding: 0.4rem;
+  margin-bottom: 0.4rem;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--border);
+  font-size: 0.74rem;
+  color: var(--text-2);
+}
+
+.sin__tip {
+  font-size: 0.66rem;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
+.sin__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem 0.9rem;
+  border-top: 1px solid var(--border);
 }
 
 /* 空态 */

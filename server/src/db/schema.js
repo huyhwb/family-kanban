@@ -190,6 +190,42 @@ const migrations = [
 
   -- 老数据：原来的 quantity/unit 就是整件数量
   UPDATE medicine SET pack_count = quantity, pack_unit = unit;
+  `,
+
+  // v9 —— 规格拆两栏：整包规格（必填）+ 小包装规格（选填）
+  `
+  ALTER TABLE medicine ADD COLUMN pack_spec TEXT;   -- 每盒/瓶/罐的整体规格，如 0.25g×24粒/盒、100ml/瓶
+  ALTER TABLE medicine ADD COLUMN unit_spec TEXT;   -- 小包装规格，如 每袋5g、每支10ml
+
+  UPDATE medicine SET pack_spec = spec WHERE pack_spec IS NULL;
+  `,
+
+  // v10 —— 库存改按批次记录：多盒可分别录有效期，总量由批次汇总
+  `
+  CREATE TABLE IF NOT EXISTS medicine_batch (
+    id          TEXT PRIMARY KEY,
+    medicine_id TEXT NOT NULL,
+    pack_count  REAL NOT NULL DEFAULT 0,
+    loose_count REAL NOT NULL DEFAULT 0,
+    expiry_date TEXT,
+    created_at  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_medicine ON medicine_batch(medicine_id, expiry_date);
+
+  -- 老数据迁移成一条批次（有数量或有有效期才迁）
+  INSERT INTO medicine_batch (id, medicine_id, pack_count, loose_count, expiry_date, created_at)
+  SELECT lower(hex(randomblob(16))), id, pack_count, loose_count, expiry_date, created_at
+    FROM medicine
+   WHERE pack_count > 0 OR loose_count > 0 OR expiry_date IS NOT NULL;
+  `,
+
+  // v11 —— 吃药类待办：关联药箱药品，完成后自动扣库存
+  `
+  ALTER TABLE todo ADD COLUMN kind          TEXT    NOT NULL DEFAULT 'task';  -- task | medicine
+  ALTER TABLE todo ADD COLUMN medicine_id   TEXT;                             -- 关联药品
+  ALTER TABLE todo ADD COLUMN dose_count    REAL    NOT NULL DEFAULT 1;       -- 每次用量
+  ALTER TABLE todo ADD COLUMN dose_unit     TEXT;                             -- 片/袋/ml，与药品散装单位对齐
+  ALTER TABLE todo ADD COLUMN long_term     INTEGER NOT NULL DEFAULT 0;       -- 1=长期服药，每天顺延不设结束
   `
 ]
 

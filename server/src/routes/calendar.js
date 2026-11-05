@@ -100,4 +100,27 @@ router.delete('/holidays/:year', (req, res) => {
   res.json(mergeYear(year))
 })
 
+/** 立即同步节假日（设置页的「立即更新」按钮） */
+router.post('/sync-holidays', async (req, res) => {
+  try {
+    const { syncHolidays } = require('../services/holidaySync')
+    const summary = await syncHolidays()
+    res.json(summary)
+  } catch (err) {
+    res.status(502).json({ error: `同步失败：${err.message}` })
+  }
+})
+
+/** 上一次自动同步的结果 */
+router.get('/sync-status', (req, res) => {
+  const { SETTING_KEYS, getSetting } = require('../services/holidaySync')
+  let last = null
+  try {
+    last = JSON.parse(getSetting(SETTING_KEYS.lastResult) || 'null')
+  } catch (err) {
+    last = null
+  }
+  res.json({ lastSync: getSetting(SETTING_KEYS.lastSync), pending: getSetting(SETTING_KEYS.pending) === '1', last })
+})
+
 module.exports = { router }

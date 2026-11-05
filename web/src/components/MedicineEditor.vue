@@ -25,6 +25,14 @@ const LOOSE_UNITS = ['片', '粒', '袋', '支', '包', 'ml', 'g']
 const mode = ref('manual')
 const saving = ref(false)
 const aiBusy = ref(false)
+const lookupBusy = ref(false)
+/** 条码查询结果：{ state: '' | 'ok' | 'notfound' | 'error', text: '' } */
+const lookupHint = ref({ state: '', text: '' })
+
+
+function setHint(state, text) {
+  lookupHint.value = { state, text }
+}
 const aiPreview = ref('')
 const errorMsg = ref('')
 const titleEl = ref(null)
@@ -32,7 +40,8 @@ const titleEl = ref(null)
 const form = reactive({
   brand: '',
   name: '',
-  spec: '',
+  packSpec: '',
+  unitSpec: '',
   expiryDate: '',
   manufacturer: '',
   // 整件 + 散装两栏：1 盒 + 5 片
@@ -55,7 +64,8 @@ function reset() {
   const t = props.item
   form.brand = t?.brand || ''
   form.name = t?.name || ''
-  form.spec = t?.spec || ''
+  form.packSpec = t?.packSpec || ''
+  form.unitSpec = t?.unitSpec || ''
   form.expiryDate = t?.expiryDate || ''
   form.manufacturer = t?.manufacturer || ''
   form.packCount = t ? t.packCount ?? 0 : 1
@@ -86,14 +96,76 @@ function close() {
 function onDetected(code) {
   const text = String(code || '').trim()
   if (!text) return
-  const exists = store.items.find((m) => m.barcode && m.barcode === text)
   form.barcode = text
   mode.value = 'manual'
-  if (exists && (!props.item || exists.id !== props.item.id)) {
-    toastOk(`已有「${exists.name}」，当前剩余 ${exists.amountText}`)
-  } else {
-    toastOk('已读取条码，继续补充药品信息')
+  lookupLocal(false)
+}
+
+/* ---- 条码查询：扫到 / 输入后自动带出药品信息 ---- */
+/** 把识别结果写进空着的字段，返回带入了哪些、哪些因已有内容跳过 */
+function applyFields(d) {
+  const got = []
+  const kept = []
+  const fill = (key, value, label) => {
+    if (!value) return
+    if (!String(form[key] || '').trim()) {
+      form[key] = value
+      got.push(label)
+    } else if (String(form[key]).trim() !== String(value).trim()) {
+      kept.push(label)
+    }
   }
+  fill('name', d.name, '药品名')
+  fill('brand', d.brand, '品牌')
+  fill('packSpec', d.packSpec, '规格')
+  fill('unitSpec', d.unitSpec, '小包装')
+  fill('manufacturer', d.manufacturer, '厂家')
+  return { got, kept }
+}
+
+/**
+ * 条码只在本机药箱里找，不联网。
+ * 命中就把已录入的信息直接填进来（连同剩余量提示），没命中就引导手动或拍照。
+ */
+function lookupLocal(silent = true) {
+  const code = form.barcode.trim()
+  if (!/^\d{6,14}$/.test(code)) return
+
+  const hit = (store.items || []).find((m) => m.barcode && m.barcode === code)
+  if (!hit) {
+    setHint('notfound', `${code} 药箱里没有这个条码，手动填写或拍药盒正面识别`)
+    if (!silent) toastError('药箱里没有这个条码')
+    return
+  }
+  if (props.item && hit.id === props.item.id) {
+    setHint('ok', `${code} 就是当前这条药品`)
+    return
+  }
+
+  const { got, kept } = applyFields({
+    name: hit.name,
+    brand: hit.brand,
+    packSpec: hit.packSpec,
+    unitSpec: hit.unitSpec,
+    manufacturer: hit.manufacturer
+  })
+  if (hit.looseUnit) form.doseUnit = hit.looseUnit
+  const tail = kept.length ? `（${kept.join('、')}已有内容，未覆盖）` : ''
+  setHint(
+    'ok',
+    `药箱里已有「${hit.name}」，剩余 ${hit.amountText}，已填入 ${got.join('、') || '无'}${tail}。要补货请直接保存后点「入库」`
+  )
+}
+
+/** 老名字保留，内部走本地查找（不再联网） */
+function lookupBarcode(silent = true) {
+  lookupLocal(silent)
+}
+
+/** 条码查不到时，直接切到拍照识别，并拉起选图 */
+function switchToPhoto() {
+  mode.value = 'ai'
+  nextTick(() => pickImage())
 }
 
 /* ---- 拍照识别 ---- */
@@ -140,7 +212,8 @@ async function onImage(e) {
     const d = res.data || {}
     form.brand = d.brand || form.brand
     form.name = d.name || form.name
-    form.spec = d.spec || form.spec
+    form.packSpec = d.packSpec || form.packSpec
+    form.unitSpec = d.unitSpec || form.unitSpec
     form.expiryDate = d.expiryDate || form.expiryDate
     form.manufacturer = d.manufacturer || form.manufacturer
     if (d.packUnit && PACK_UNITS.includes(d.packUnit)) form.packUnit = d.packUnit
@@ -160,6 +233,10 @@ async function submit() {
     errorMsg.value = '药品名不能为空'
     return
   }
+  if (!form.packSpec.trim()) {
+    errorMsg.value = '每盒（瓶/罐）的规格不能为空'
+    return
+  }
   saving.value = true
   errorMsg.value = ''
   try {
@@ -167,7 +244,8 @@ async function submit() {
       {
         brand: form.brand.trim(),
         name,
-        spec: form.spec.trim(),
+        packSpec: form.packSpec.trim(),
+        unitSpec: form.unitSpec.trim(),
         expiryDate: form.expiryDate || null,
         manufacturer: form.manufacturer.trim(),
         packCount: Number(form.packCount) || 0,
@@ -257,19 +335,25 @@ async function submit() {
 
               <div class="me__row">
                 <label class="me__field">
-                  <span class="me__label">规格</span>
-                  <input v-model="form.spec" class="field" placeholder="如 0.3g×20粒/盒" />
+                  <span class="me__label">规格（每盒） <em>*</em></span>
+                  <input v-model="form.packSpec" class="field" placeholder="如 0.25g×24粒/盒" />
                 </label>
+                <label class="me__field">
+                  <span class="me__label">小包装规格（选填）</span>
+                  <input v-model="form.unitSpec" class="field" placeholder="如 每袋5g" />
+                </label>
+              </div>
+
+              <div class="me__row">
                 <label class="me__field">
                   <span class="me__label">保质期（有效期至）</span>
                   <input v-model="form.expiryDate" type="date" class="field" />
                 </label>
+                <label class="me__field">
+                  <span class="me__label">生产厂家</span>
+                  <input v-model="form.manufacturer" class="field" placeholder="如 华北制药股份有限公司" />
+                </label>
               </div>
-
-              <label class="me__field">
-                <span class="me__label">生产厂家</span>
-                <input v-model="form.manufacturer" class="field" placeholder="如 华北制药股份有限公司" />
-              </label>
 
               <div class="me__field">
                 <span class="me__label">剩余量</span>
@@ -296,10 +380,37 @@ async function submit() {
                 </div>
               </div>
 
-              <label class="me__field">
-                <span class="me__label">条码</span>
-                <input v-model="form.barcode" class="field" placeholder="扫不出来可留空" />
-              </label>
+              <div class="me__field">
+                <span class="me__label">
+                  条码{{ lookupBusy ? '（查询中…）' : '' }}
+                </span>
+
+                <div v-if="lookupHint.state" class="me__qbox">
+                  <p class="me__qhint" :class="`me__qhint--${lookupHint.state}`">{{ lookupHint.text }}</p>
+                  <button
+                    v-if="lookupHint.state === 'notfound'"
+                    class="me__qswitch"
+                    type="button"
+                    @click="switchToPhoto"
+                  >
+                    拍药盒正面识别 →
+                  </button>
+                </div>
+
+                <div class="me__qrow">
+                  <input
+                    v-model="form.barcode"
+                    class="field"
+                    inputmode="numeric"
+                    placeholder="扫码或输入后自动查找药箱里的记录"
+                    @blur="lookupBarcode(true)"
+                    @keyup.enter="lookupBarcode(false)"
+                  />
+                  <button class="me__qbtn" type="button" :disabled="lookupBusy" @click="lookupBarcode(false)">
+                    查询
+                  </button>
+                </div>
+              </div>
 
               <label class="me__field">
                 <span class="me__label">备注</span>
@@ -487,6 +598,77 @@ async function submit() {
   font-size: 0.66rem;
   color: var(--text-3);
   line-height: 1.5;
+}
+
+.me__qrow {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.me__qrow .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.me__qbtn {
+  flex: none;
+  padding: 0 0.7rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 0.74rem;
+}
+
+.me__qhint {
+  font-size: 0.68rem;
+  line-height: 1.5;
+  padding: 0.25rem 0.45rem;
+  border-radius: var(--r-sm);
+  margin-bottom: 0.1rem;
+  color: var(--text-2);
+  background: var(--panel-3);
+}
+
+.me__qhint--ok {
+  color: var(--green);
+  background: var(--green-weak);
+}
+
+.me__qhint--notfound {
+  color: var(--amber);
+  background: var(--amber-weak);
+}
+
+.me__qbox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.me__qswitch {
+  align-self: flex-start;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--primary);
+}
+
+.me__qswitch:hover {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+}
+
+.me__qhint--error {
+  color: var(--red);
+  background: var(--red-weak);
+}
+
+.me__qbtn:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .me__unit {

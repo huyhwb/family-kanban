@@ -99,16 +99,21 @@ export const api = {
   medicines: {
     list: (params) => request(`/medicines${qs(params)}`),
     stats: () => request('/medicines/stats'),
+    alerts: () => request('/medicines/alerts'),
     units: () => request('/medicines/units'),
+    lookup: (barcode) => request(`/medicines/lookup${qs({ barcode })}`),
     create: (payload) => request('/medicines', { method: 'POST', body: payload }),
     update: (id, payload) => request(`/medicines/${id}`, { method: 'PATCH', body: payload }),
     remove: (id) => request(`/medicines/${id}`, { method: 'DELETE' }),
-    adjust: (id, delta) => request(`/medicines/${id}/adjust`, { method: 'POST', body: { delta } })
+    adjust: (id, delta) => request(`/medicines/${id}/adjust`, { method: 'POST', body: { delta } }),
+    stockIn: (id, batches) => request(`/medicines/${id}/stock-in`, { method: 'POST', body: { batches } }),
+    detail: (id) => request(`/medicines/${id}`)
   },
 
   ai: {
     recognizeMedicine: (image) => request('/ai/medicine', { method: 'POST', body: { image } }),
-    ping: () => request('/ai/ping', { method: 'POST' })
+    ping: () => request('/ai/ping', { method: 'POST' }),
+    byBarcode: (barcode) => request('/ai/barcode', { method: 'POST', body: { barcode } })
   },
 
   settings: {
@@ -120,7 +125,9 @@ export const api = {
     holidays: (year) => request(`/calendar/holidays${qs({ year })}`),
     years: () => request('/calendar/holiday-years'),
     save: (year, payload) => request(`/calendar/holidays/${year}`, { method: 'PUT', body: payload }),
-    reset: (year) => request(`/calendar/holidays/${year}`, { method: 'DELETE' })
+    reset: (year) => request(`/calendar/holidays/${year}`, { method: 'DELETE' }),
+    syncHolidays: () => request('/calendar/sync-holidays', { method: 'POST' }),
+    syncStatus: () => request('/calendar/sync-status')
   },
 
   backup: {

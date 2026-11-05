@@ -19,11 +19,16 @@ const DEFAULT_SETTINGS = {
   'reminder.defaultDurationDays': 1,
   'reminder.snoozeMinutes': 10,
   'holiday.dataYear': 2026,
+  // 每月 1 号自动更新放假安排，失败次日重试
+  'calendar.autoHoliday': 1,
   // 药箱 AI 识别：默认走 Agnes（完全兼容 OpenAI 协议）
   'medicine.aiBaseUrl': 'https://api.agnes-ai.cn/v1',
   'medicine.aiModel': 'agnes-2.5-flash',
   'medicine.aiKey': '',
-  'medicine.warnDays': 30
+  'medicine.warnDays': 30,
+  // 条码查询：留空用内置的 OpenFoodFacts，填了就用自定义接口（{barcode} 会被替换）
+  'medicine.barcodeApi': '',
+  'medicine.barcodeApiKey': ''
 }
 
 /** 内置角色与默认常用语 */

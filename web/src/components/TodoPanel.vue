@@ -30,10 +30,21 @@ const EXPORT_SCOPES = [
   { key: 'all', name: '全部', hint: '所有未完成' }
 ]
 
+/** 导出时按成员筛选；空数组表示全部成员 */
+const exportMembers = ref([])
+
+function toggleExportMember(id) {
+  const i = exportMembers.value.indexOf(id)
+  if (i >= 0) exportMembers.value.splice(i, 1)
+  else exportMembers.value.push(id)
+}
+
 function doExport(scope) {
   exportOpen.value = false
+  const q = new URLSearchParams({ scope })
+  if (exportMembers.value.length) q.set('memberId', exportMembers.value.join(','))
   // 直接跳转下载：iOS 会弹出「加入日历」，Android 用日历 App 打开即可
-  window.location.href = `/api/export/ics?scope=${encodeURIComponent(scope)}`
+  window.location.href = `/api/export/ics?${q.toString()}`
 }
 const deleteOpen = computed({
   get: () => !!pendingDelete.value,
@@ -280,6 +291,26 @@ function clearFilters() {
               生成一份 .ics 日历文件：iPhone / iPad 打开后点「添加到日历」，
               安卓用系统日历或 Google 日历导入即可。选个时间范围：
             </p>
+            <div class="xp__members">
+              <span class="xp__members-label">成员</span>
+              <button
+                class="xp__mchip"
+                :class="{ 'xp__mchip--on': !exportMembers.length }"
+                @click="exportMembers = []"
+              >
+                全部
+              </button>
+              <button
+                v-for="m in board.members"
+                :key="m.id"
+                class="xp__mchip"
+                :class="{ 'xp__mchip--on': exportMembers.includes(m.id) }"
+                @click="toggleExportMember(m.id)"
+              >
+                {{ m.name }}
+              </button>
+            </div>
+
             <div class="xp__grid">
               <button
                 v-for="s in EXPORT_SCOPES"
@@ -579,6 +610,36 @@ function clearFilters() {
 }
 
 /* 导出到日历 */
+.xp__members {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.6rem;
+}
+
+.xp__members-label {
+  font-size: 0.68rem;
+  color: var(--text-3);
+  margin-right: 0.15rem;
+}
+
+.xp__mchip {
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.7rem;
+  color: var(--text-2);
+  background: var(--panel-2);
+}
+
+.xp__mchip--on {
+  background: var(--primary-weak);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 500;
+}
+
 .td__export {
   flex: none;
   width: 1.7rem;

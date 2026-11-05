@@ -201,6 +201,43 @@ const reminderDefaults = reactive({
 
 const soundOn = computed(() => String(board.settings['ui.soundEnabled'] ?? '1') !== '0')
 
+/* ---- 放假安排自动更新 ---- */
+const autoHoliday = computed(() => String(board.settings['calendar.autoHoliday'] ?? '1') !== '0')
+const holidaySyncing = ref(false)
+const holidayStatus = ref('')
+
+async function toggleAutoHoliday() {
+  try {
+    await board.updateSettings({ 'calendar.autoHoliday': autoHoliday.value ? 0 : 1 })
+  } catch (err) {
+    toastError(err.message)
+  }
+}
+
+async function syncHolidayNow() {
+  if (holidaySyncing.value) return
+  holidaySyncing.value = true
+  holidayStatus.value = ''
+  try {
+    const r = await api.calendar.syncHolidays()
+    const years = (r.done || []).map((d) => d.year).join('、')
+    if (r.ok) {
+      holidayStatus.value = `已更新 ${years}`
+      toastOk(`放假安排已更新（${years}）`)
+      loadHolidayJson()
+    } else {
+      const err = (r.failed || []).map((f) => `${f.year}：${f.error}`).join('；')
+      holidayStatus.value = '同步失败'
+      toastError(`同步失败：${err}`)
+    }
+  } catch (err) {
+    holidayStatus.value = '同步失败'
+    toastError(err.message)
+  } finally {
+    holidaySyncing.value = false
+  }
+}
+
 /* ---- 药箱：AI 识别配置 ---- */
 const aiForm = reactive({
   baseUrl: 'https://api.agnes-ai.cn/v1',
@@ -208,6 +245,8 @@ const aiForm = reactive({
   key: ''
 })
 const aiTesting = ref(false)
+/** 测试连接的即时结果，显示在按钮下方 */
+const aiTestResult = ref({ state: '', text: '' })
 const warnDays = ref(30)
 
 function syncMedicineSettings() {
@@ -224,6 +263,7 @@ async function saveAi() {
       'medicine.aiModel': aiForm.model.trim() || 'agnes-2.5-flash',
       'medicine.aiKey': aiForm.key.trim()
     })
+    aiTestResult.value = { state: '', text: '' }
     toastOk('AI 配置已保存')
   } catch (err) {
     toastError(err.message)
@@ -233,17 +273,25 @@ async function saveAi() {
 async function testAi() {
   if (aiTesting.value) return
   aiTesting.value = true
+  aiTestResult.value = { state: 'pending', text: '正在测试连接…' }
   try {
     // 先落盘，后端读的是库里的配置
     await board.updateSettings({
-      'medicine.aiBaseUrl': aiForm.baseUrl.trim(),
-      'medicine.aiModel': aiForm.model.trim() || 'agnes-2.5-flash',
-      'medicine.aiKey': aiForm.key.trim()
+      'medicine.aiBaseUrl': (aiForm.baseUrl || '').trim(),
+      'medicine.aiModel': (aiForm.model || '').trim() || 'agnes-2.5-flash',
+      'medicine.aiKey': (aiForm.key || '').trim()
     })
     await api.ai.ping()
-    toastOk('连接成功')
+    aiTestResult.value = {
+      state: 'ok',
+      text: `连接成功 · 模型 ${(aiForm.model || '').trim() || 'agnes-2.5-flash'} 已响应`
+    }
   } catch (err) {
-    toastError(err.message)
+    // 任何异常都要给出可见文案，不能静默
+    aiTestResult.value = {
+      state: 'error',
+      text: (err && err.message) || '连接失败，请检查接口地址与密钥'
+    }
   } finally {
     aiTesting.value = false
   }
@@ -622,6 +670,13 @@ function close() {
                     </button>
                     <button class="btn btn--primary btn--sm" @click="saveAi">保存</button>
                   </div>
+                  <p
+                    v-if="aiTestResult.text"
+                    class="st__testres"
+                    :class="`st__testres--${aiTestResult.state}`"
+                  >
+                    {{ aiTestResult.text }}
+                  </p>
                   <p class="sgroup__text">
                     密钥只存在本机数据库（`data/kanban.db`），识别时由服务端转发图片，不会写进前端代码。
                   </p>
@@ -894,6 +949,24 @@ function close() {
 
                 <div class="sgroup">
                   <div class="sgroup__title">放假安排</div>
+                  <div class="srow">
+                    <span class="srow__label">每月自动更新</span>
+                    <button
+                      class="switch"
+                      :class="{ 'switch--on': autoHoliday }"
+                      @click="toggleAutoHoliday"
+                    />
+                    <span class="srow__unit">{{ autoHoliday ? '已开启' : '已关闭' }}</span>
+                  </div>
+                  <p class="sgroup__text">
+                    每月 1 号凌晨自动拉取一次（失败次日重试），同步今年与明年的放假与调休。
+                  </p>
+                  <div class="srow srow--actions">
+                    <button class="btn btn--sm" :disabled="holidaySyncing" @click="syncHolidayNow">
+                      {{ holidaySyncing ? '同步中…' : '立即更新' }}
+                    </button>
+                    <span v-if="holidayStatus" class="srow__unit">{{ holidayStatus }}</span>
+                  </div>
                   <p class="sgroup__text">
                     节假日与调休数据按年内置，可按年度覆盖更新。格式：<code>{ "off": { "2027-01-01": "元旦" }, "work": ["2027-01-04"] }</code>
                   </p>
@@ -1374,6 +1447,30 @@ function close() {
 }
 
 /* 长文本输入（接口地址、模型名、密钥）占满剩余宽度 */
+.st__testres {
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--r-sm);
+  font-size: 0.7rem;
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.st__testres--ok {
+  color: var(--green);
+  background: var(--green-weak);
+}
+
+.st__testres--pending {
+  color: var(--text-2);
+  background: var(--panel-3);
+}
+
+.st__testres--error {
+  color: var(--red);
+  background: var(--red-weak);
+}
+
 .srow__input--wide {
   flex: 1;
   width: auto;
