@@ -236,7 +236,7 @@ async function submit() {
     return
   }
   if (!form.packSpec.trim()) {
-    errorMsg.value = '每盒（瓶/罐）的规格不能为空'
+    errorMsg.value = '规格不能为空'
     return
   }
   saving.value = true
@@ -338,7 +338,7 @@ async function submit() {
 
               <div class="me__row">
                 <label class="me__field">
-                  <span class="me__label">规格（每盒） <em>*</em></span>
+                  <span class="me__label">规格 <em>*</em></span>
                   <input v-model="form.packSpec" class="field" placeholder="如 0.25g×24粒/盒、100ml/瓶" />
                 </label>
                 <label class="me__field">
@@ -364,7 +364,7 @@ async function submit() {
 
               <div class="me__row">
                 <label class="me__field">
-                  <span class="me__label">保质期（有效期至）</span>
+                  <span class="me__label">保质期</span>
                   <input v-model="form.expiryDate" type="date" class="field" />
                 </label>
                 <label class="me__field">

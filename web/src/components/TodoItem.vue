@@ -107,9 +107,31 @@ function toggleMenu(e) {
  * - 单人/无成员：直接完成或撤回（可反复）
  * - 多人：弹出「谁完成了」，逐个勾选
  */
+/** 长按主体 = 撤回一次；短按 = 完成一次，两个动作彻底分开 */
+let pressTimer = null
+let longPressed = false
+
+function onPressStart() {
+  longPressed = false
+  if (!canRestore.value) return
+  clearTimeout(pressTimer)
+  pressTimer = setTimeout(() => {
+    longPressed = true
+    emit('action', 'restore', props.todo, null)
+  }, 600)
+}
+
+function onPressEnd() {
+  clearTimeout(pressTimer)
+}
+
 function onBodyClick() {
   if (menuOpen.value) {
     menuOpen.value = false
+    return
+  }
+  if (longPressed) {
+    longPressed = false
     return
   }
   if (isMultiMember.value && !allMembersDone.value) {
@@ -117,8 +139,15 @@ function onBodyClick() {
     menuOpen.value = true
     return
   }
-  emit('action', isDone.value ? 'restore' : 'done', props.todo, null)
+  // 短按永远只做「完成」，不再根据状态来回切换
+  emit('action', 'done', props.todo, null)
 }
+
+/** 有完成记录才能撤回 */
+const canRestore = computed(() => {
+  if (isMultiMember.value) return memberList.value.some((m) => m.status === 'done')
+  return isDone.value || doneCount.value > 0
+})
 
 function pick(action, memberId = null) {
   menuOpen.value = false
@@ -182,6 +211,9 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           </button>
         </template>
 
+        <button v-if="canRestore" class="todo__menu-item todo__menu-item--undo" @click="pick('restore')">
+          撤回一次
+        </button>
         <button class="todo__menu-item" @click="pick('edit')">编辑</button>
         <button class="todo__menu-item todo__menu-item--danger" @click="pick('delete')">
           删除
@@ -191,8 +223,12 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
     <div
       class="todo__main"
-      :title="isDone ? '点击撤回' : isMulti ? `点击完成第 ${doneCount + 1} 次` : '点击完成'"
+      :title="isMulti ? `点击完成第 ${Math.min(doneCount + 1, targetCount)} 次，长按撤回一次` : '点击完成，长按撤回'"
       @click="onBodyClick"
+      @pointerdown="onPressStart"
+      @pointerup="onPressEnd"
+      @pointerleave="onPressEnd"
+      @pointercancel="onPressEnd"
     >
       <div class="todo__title">
         <span v-if="todo.kind === 'medicine'" class="todo__pill">药</span>

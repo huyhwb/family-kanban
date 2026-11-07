@@ -94,6 +94,7 @@ async function loadMedicines() {
 
 /** 切成吃药事项：自动打开提醒，按天重复 */
 function pickKindMedicine() {
+  autoTitle = ''
   form.kind = 'medicine'
   form.quadrant = null
   form.reminderEnabled = true
@@ -101,10 +102,19 @@ function pickKindMedicine() {
   if (!medicineOptions.value.length) loadMedicines()
 }
 
+/** 上一次自动生成的标题，用来判断"用户有没有自己改过" */
+let autoTitle = ''
+
 function onPickMedicine() {
   const m = medicineOptions.value.find((x) => x.id === form.medicineId)
   if (!m) return
-  if (!form.title.trim()) form.title = `吃${m.name}`
+
+  // 标题为空、或仍是上次自动填的那个，就跟着药品走；用户手写过就不动
+  const next = `吃${m.name}`
+  if (!form.title.trim() || form.title === autoTitle) {
+    form.title = next
+    autoTitle = next
+  }
   if (m.looseUnit) form.doseUnit = m.looseUnit
 }
 
