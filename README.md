@@ -377,3 +377,4 @@ docker compose up -d --build                  # 方式二：改代码后重新�
 - 升高位时低位归零：`1.4.2` 加个大功能 → `2.0.0`，不是 `2.4.2`
 - 纯文档改动（README / docs）**不升版本**，也不触发镜像构建
 - 改完推送，Actions 自动产出同名镜像标签（如 `ghcr.io/huyhwb/family-kanban:2.0.0`）
+- 主分支构建会同时把 `latest` 指向该版本，`latest` 永远等于最新发布的那一版

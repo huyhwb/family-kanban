@@ -113,7 +113,7 @@ git add -A && git commit -m "fix: xxx" && git push
 ```
 
 Actions 会读取根 `package.json` 的 `version`，自动打出 **版本号标签**（如 `1.0.0`）与 `sha-xxxx` 短哈希。
-**不再发布 `latest`**，升级时改版本号即可，回滚也只需改回旧版本。NAS 上：
+主分支构建会同时打 `latest`，**它始终指向最新的一版**；要固定版本仍建议写明确版本号。NAS 上：
 
 ```bash
 docker compose pull && docker compose up -d

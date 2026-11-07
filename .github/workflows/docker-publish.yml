@@ -50,6 +50,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ steps.ver.outputs.version }}
+            # 主分支构建同时打 latest，始终指向最新版本
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
 
       - name: 输出摘要
