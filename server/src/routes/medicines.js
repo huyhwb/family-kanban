@@ -3,7 +3,13 @@
 const express = require('express')
 const dayjs = require('dayjs')
 const { getDb, getSettings, withTx } = require('../db')
-const { syncTotals, takeFromBatches, batchList } = require('../services/medicineStock')
+const {
+  syncTotals,
+  takeFromBatches,
+  takeLooseByAmount,
+  perPackOf,
+  batchList
+} = require('../services/medicineStock')
 const { uid, nowIso } = require('../lib/util')
 
 const router = express.Router()
@@ -74,6 +80,8 @@ function shape(row) {
     packUnit,
     looseCount,
     looseUnit,
+    // 每盒含多少个小规格单位（1 盒 = 12 片），没填就是 0，扣减时退回解析规格
+    perPack: Number(row.per_pack) || 0,
     amountText: amountText(packCount, packUnit, looseCount, looseUnit),
     // 兼容旧字段
     quantity: packCount,
@@ -317,8 +325,8 @@ router.post('/', (req, res) => {
   db.prepare(
     `INSERT INTO medicine
        (id, brand, name, spec, pack_spec, unit_spec, expiry_date, manufacturer, quantity, unit,
-        pack_count, pack_unit, loose_count, loose_unit, barcode, note, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+        pack_count, pack_unit, loose_count, loose_unit, per_pack, barcode, note, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
   ).run(
     id,
     text(body.brand, 40),
@@ -334,6 +342,7 @@ router.post('/', (req, res) => {
     amount.packUnit,
     amount.looseCount,
     amount.looseUnit,
+    Math.max(0, num(body.perPack)),
     text(body.barcode, 40),
     text(body.note, 500),
     ts,
@@ -380,7 +389,7 @@ router.patch('/:id', (req, res) => {
   db.prepare(
     `UPDATE medicine
      SET brand = ?, name = ?, spec = ?, pack_spec = ?, unit_spec = ?, expiry_date = ?, manufacturer = ?,
-         unit = ?, pack_unit = ?, loose_unit = ?, barcode = ?, note = ?, updated_at = ?
+         unit = ?, pack_unit = ?, loose_unit = ?, per_pack = ?, barcode = ?, note = ?, updated_at = ?
      WHERE id = ?;`
   ).run(
     next.brand,
@@ -393,6 +402,7 @@ router.patch('/:id', (req, res) => {
     amount.packUnit,
     amount.packUnit,
     amount.looseUnit,
+    body.perPack !== undefined ? Math.max(0, num(body.perPack)) : row.per_pack,
     next.barcode,
     next.note,
     nowIso(),
@@ -493,19 +503,13 @@ router.post('/:id/adjust', (req, res) => {
     }
   }
 
-  if (useLoose > 0 || usePack > 0) {
-    // 散装不够时，用整件继续抵
-    let looseNeed = useLoose
-    let packNeed = usePack
-    // 散装不够就用整件顶上：一盒都没拆时点「−」= 用掉一盒
-    if (looseNeed > 0) {
-      const looseTotal = num(row.loose_count)
-      if (looseNeed > looseTotal) {
-        packNeed += looseNeed - looseTotal
-        looseNeed = looseTotal
-      }
-    }
-    takeFromBatches(db, req.params.id, packNeed, looseNeed)
+  if (useLoose > 0) {
+    // 按散装单位扣：散装不够自动拆盒（1 盒 12 片，吃 1 片 → 0 盒 11 片）
+    const perPack = perPackOf(row.pack_spec, row.loose_unit, row.per_pack)
+    takeLooseByAmount(db, req.params.id, useLoose, perPack)
+  }
+  if (usePack > 0) {
+    takeFromBatches(db, req.params.id, usePack, 0)
   }
 
   syncTotals(db, req.params.id)

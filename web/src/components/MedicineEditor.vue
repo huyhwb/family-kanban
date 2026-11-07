@@ -42,6 +42,7 @@ const form = reactive({
   name: '',
   packSpec: '',
   unitSpec: '',
+  perPack: 0,
   expiryDate: '',
   manufacturer: '',
   // 整件 + 散装两栏：1 盒 + 5 片
@@ -66,6 +67,7 @@ function reset() {
   form.name = t?.name || ''
   form.packSpec = t?.packSpec || ''
   form.unitSpec = t?.unitSpec || ''
+  form.perPack = Number(t?.perPack) || 0
   form.expiryDate = t?.expiryDate || ''
   form.manufacturer = t?.manufacturer || ''
   form.packCount = t ? t.packCount ?? 0 : 1
@@ -246,6 +248,7 @@ async function submit() {
         name,
         packSpec: form.packSpec.trim(),
         unitSpec: form.unitSpec.trim(),
+        perPack: Number(form.perPack) || 0,
         expiryDate: form.expiryDate || null,
         manufacturer: form.manufacturer.trim(),
         packCount: Number(form.packCount) || 0,
@@ -336,13 +339,28 @@ async function submit() {
               <div class="me__row">
                 <label class="me__field">
                   <span class="me__label">规格（每盒） <em>*</em></span>
-                  <input v-model="form.packSpec" class="field" placeholder="如 0.25g×24粒/盒" />
+                  <input v-model="form.packSpec" class="field" placeholder="如 0.25g×24粒/盒、100ml/瓶" />
                 </label>
                 <label class="me__field">
-                  <span class="me__label">小包装规格（选填）</span>
-                  <input v-model="form.unitSpec" class="field" placeholder="如 每袋5g" />
+                  <span class="me__label">每盒含</span>
+                  <div class="me__perpack">
+                    <input
+                      v-model.number="form.perPack"
+                      type="number"
+                      min="0"
+                      step="1"
+                      class="field"
+                      placeholder="12"
+                    />
+                    <select v-model="form.looseUnit" class="field me__perunit">
+                      <option v-for="u in LOOSE_UNITS" :key="u" :value="u">{{ u }}</option>
+                    </select>
+                  </div>
                 </label>
               </div>
+              <p class="me__perhint">
+                填了「每盒含」后，取用会自动拆盒：1 盒 12 片吃 1 片 → 变成 0 盒 11 片。
+              </p>
 
               <div class="me__row">
                 <label class="me__field">
@@ -371,9 +389,7 @@ async function submit() {
                     <span class="me__amount-tag">散装</span>
                     <button class="me__step" type="button" @click="bump('loose', -1)">−</button>
                     <input v-model.number="form.looseCount" type="number" min="0" step="1" class="field me__stepnum" />
-                    <select v-model="form.looseUnit" class="field me__unit">
-                      <option v-for="u in LOOSE_UNITS" :key="u" :value="u">{{ u }}</option>
-                    </select>
+                    <span class="me__unittext">{{ form.looseUnit }}</span>
                     <button class="me__step" type="button" @click="bump('loose', 1)">＋</button>
                   </div>
                   <p class="me__amount-hint">例如「1 盒 + 5 片」；整盒未拆就只填整件，只剩散装就把整件填 0</p>
@@ -544,6 +560,38 @@ async function submit() {
 .me__label em {
   color: var(--red);
   font-style: normal;
+}
+
+.me__perpack {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.me__perpack .field:first-child {
+  width: 4.5rem;
+  flex: none;
+  text-align: center;
+}
+
+.me__perunit {
+  width: 4.2rem;
+  flex: none;
+}
+
+.me__perhint {
+  font-size: 0.66rem;
+  color: var(--text-3);
+  line-height: 1.5;
+  margin-top: -0.15rem;
+}
+
+.me__unittext {
+  width: 4.2rem;
+  flex: none;
+  text-align: center;
+  font-size: 0.74rem;
+  color: var(--text-2);
+  line-height: 1.9rem;
 }
 
 .me__amount {

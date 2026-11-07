@@ -77,7 +77,9 @@ function batchList(db, medicineId) {
  * 从「0.25g×24粒/盒」这类规格里解析出每包装含多少个散装单位。
  * 解析不出来返回 0（调用方就只按散装算可用量）。
  */
-function perPackOf(packSpec, looseUnit) {
+function perPackOf(packSpec, looseUnit, perPack) {
+  const explicit = Number(perPack) || 0
+  if (explicit > 0) return explicit
   const spec = String(packSpec || '')
   if (!spec) return 0
   const unit = String(looseUnit || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -104,6 +106,49 @@ function availableInLoose(medicine, perPack) {
 }
 
 /**
+ * 按散装单位扣减，自动拆盒：
+ * 0 盒 0 片 + 每盒 12 片，吃 1 片 → 拆一盒 → 0 盒 11 片。
+ * 从最早到期的批次开始扣，返回还差多少（缺货时 > 0）。
+ */
+function takeLooseByAmount(db, medicineId, need, perPack) {
+  let remaining = Math.max(0, Number(need) || 0)
+  if (remaining <= 0) return 0
+
+  const rows = db
+    .prepare(
+      `SELECT * FROM medicine_batch
+       WHERE medicine_id = ? AND (pack_count > 0 OR loose_count > 0)
+       ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date ASC, created_at ASC;`
+    )
+    .all(medicineId)
+
+  const upd = db.prepare('UPDATE medicine_batch SET pack_count = ?, loose_count = ? WHERE id = ?;')
+  for (const r of rows) {
+    if (remaining <= 0) break
+    let bp = Number(r.pack_count) || 0
+    let bl = Number(r.loose_count) || 0
+
+    // 先用现成的散装
+    const useLoose = Math.min(bl, remaining)
+    bl -= useLoose
+    remaining -= useLoose
+
+    // 还不够就拆盒（每拆一盒补 perPack 个散装）
+    if (remaining > 0 && perPack > 0) {
+      while (remaining > 0 && bp > 0) {
+        bp -= 1
+        bl += perPack
+        const take = Math.min(bl, remaining)
+        bl -= take
+        remaining -= take
+      }
+    }
+    upd.run(bp, bl, r.id)
+  }
+  return remaining
+}
+
+/**
  * 按「每次用量 × 次数」扣库存。
  * 单位与散装单位一致时按散装扣；一盒没拆也能自动折盒（perPack）。
  * 返回 { ok, shortage }，shortage>0 表示库存不够、只扣到 0。
@@ -113,24 +158,13 @@ function consumeByDose(medicineId, amount, unit) {
   const med = db.prepare('SELECT * FROM medicine WHERE id = ?;').get(medicineId)
   if (!med) return { ok: false, shortage: amount, available: 0, reason: '药品不存在' }
 
-  const perPack = perPackOf(med.pack_spec, med.loose_unit || unit)
-  const loose = Number(med.loose_count) || 0
-  const pack = Number(med.pack_count) || 0
+  const perPack = perPackOf(med.pack_spec, med.loose_unit || unit, med.per_pack)
   const available = availableInLoose(med, perPack)
-
   const need = Math.max(0, Number(amount) || 0)
   const shortage = Math.max(0, need - available)
-  const use = Math.min(need, available)
 
-  // 先扣散装，不够的部分按"每包多少"折整件（一盒拆了不找零）
-  const looseUse = Math.min(loose, use)
-  let rest = use - looseUse
-  let packUse = 0
-  if (rest > 0 && perPack > 0) {
-    packUse = Math.min(pack, Math.ceil(rest / perPack))
-  }
-
-  takeFromBatches(db, medicineId, packUse, looseUse)
+  // 散装不够时自动拆盒，拆开的部分留在 loose 里，不会凭空蒸发
+  takeLooseByAmount(db, medicineId, Math.min(need, available), perPack)
   syncTotals(db, medicineId)
   return { ok: shortage <= 0, shortage, available }
 }
@@ -168,6 +202,7 @@ function refundDose(medicineId, amount) {
 }
 
 module.exports = {
+  takeLooseByAmount,
   refundDose,
   syncTotals,
   takeFromBatches,

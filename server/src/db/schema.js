@@ -226,6 +226,11 @@ const migrations = [
   ALTER TABLE todo ADD COLUMN dose_count    REAL    NOT NULL DEFAULT 1;       -- 每次用量
   ALTER TABLE todo ADD COLUMN dose_unit     TEXT;                             -- 片/袋/ml，与药品散装单位对齐
   ALTER TABLE todo ADD COLUMN long_term     INTEGER NOT NULL DEFAULT 0;       -- 1=长期服药，每天顺延不设结束
+  `,
+
+  // v12 —— 每盒含多少个小规格单位（1 盒 = 12 片），用于拆盒换算
+  `
+  ALTER TABLE medicine ADD COLUMN per_pack REAL NOT NULL DEFAULT 0;
   `
 ]
 

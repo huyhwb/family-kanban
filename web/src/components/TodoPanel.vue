@@ -55,6 +55,14 @@ const deleteOpen = computed({
 
 const unclassified = computed(() => board.quadrants.null || [])
 
+/** 四象限里还有内容的那几个；全空时整体走空态 */
+const filledQuadrants = computed(() =>
+  QUADRANTS.filter((q) => (board.quadrants[q.key] || []).length > 0)
+)
+const emptyQuadrantNames = computed(() =>
+  QUADRANTS.filter((q) => (board.quadrants[q.key] || []).length === 0).map((q) => q.name)
+)
+
 const hasUnclassified = computed(() => unclassified.value.length > 0)
 
 const nextReminder = computed(() => {
@@ -206,8 +214,13 @@ function clearFilters() {
 
     <div class="td__body scroll-y">
       <div v-if="board.viewMode === 'quadrant'" class="quad" :class="{ 'quad--with-extra': hasUnclassified }">
+        <div v-if="!filledQuadrants.length && !hasUnclassified" class="quad__allEmpty">
+          <span class="quad__allEmpty-title">这些分类都是空的</span>
+          <span class="quad__allEmpty-desc">{{ emptyQuadrantNames.join(' · ') }}</span>
+        </div>
+
         <div
-          v-for="q in QUADRANTS"
+          v-for="q in filledQuadrants"
           :key="q.key"
           class="quad__cell"
           :class="`quad__cell--${q.tone}`"
@@ -225,9 +238,12 @@ function clearFilters() {
               @action="onAction"
               @edit="openEditor(t)"
             />
-            <p v-if="!board.quadrants[q.key].length" class="quad__empty">暂无事项</p>
           </div>
         </div>
+
+        <p v-if="filledQuadrants.length && emptyQuadrantNames.length" class="quad__folded">
+          已折叠空分类：{{ emptyQuadrantNames.join(' · ') }}
+        </p>
 
         <div v-if="hasUnclassified" class="quad__cell quad__cell--extra">
           <div class="quad__head">
@@ -607,6 +623,37 @@ function clearFilters() {
 
 .td__add:active {
   transform: scale(0.99);
+}
+
+/* 空分类折叠 */
+.quad__allEmpty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 1.6rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+}
+
+.quad__allEmpty-title {
+  font-size: 0.82rem;
+  color: var(--text-2);
+}
+
+.quad__allEmpty-desc {
+  font-size: 0.68rem;
+}
+
+.quad__folded {
+  grid-column: 1 / -1;
+  font-size: 0.66rem;
+  color: var(--text-3);
+  text-align: center;
+  padding: 0.15rem 0;
 }
 
 /* 导出到日历 */

@@ -628,10 +628,14 @@ const members = computed(() => board.members)
             <div v-if="form.kind === 'medicine'" class="ed__medbox">
               <label class="ed__field">
                 <span class="ed__label">关联药品</span>
-                <select v-model="form.medicineId" class="field" @change="onPickMedicine">
+                <select
+                  v-model="form.medicineId"
+                  class="field ed__medselect"
+                  @change="onPickMedicine"
+                >
                   <option value="">从药箱选择药品</option>
                   <option v-for="m in medicineOptions" :key="m.id" :value="m.id">
-                    {{ m.name }}（剩 {{ m.amountText }}）
+                    {{ m.name }} · {{ m.amountText }}
                   </option>
                 </select>
               </label>
@@ -888,6 +892,12 @@ const members = computed(() => board.members)
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--panel-2);
+}
+
+.ed__medselect {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 .ed__dose {
