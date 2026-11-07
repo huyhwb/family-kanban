@@ -116,6 +116,10 @@ function onPickMedicine() {
     autoTitle = next
   }
   if (m.looseUnit) form.doseUnit = m.looseUnit
+  // 吃药事项默认就要有定时提醒
+  form.kind = 'medicine'
+  form.reminderEnabled = true
+  if (form.pattern === 'yearly') form.pattern = 'daily'
 }
 
 function toggleLongTerm() {

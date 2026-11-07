@@ -235,8 +235,8 @@ async function submit() {
     errorMsg.value = '药品名不能为空'
     return
   }
-  if (!form.packSpec.trim()) {
-    errorMsg.value = '规格不能为空'
+  if (!(Number(form.perPack) > 0)) {
+    errorMsg.value = '请填写每盒含多少个小袋/片/毫升'
     return
   }
   saving.value = true
@@ -338,11 +338,11 @@ async function submit() {
 
               <div class="me__row">
                 <label class="me__field">
-                  <span class="me__label">规格 <em>*</em></span>
+                  <span class="me__label">规格</span>
                   <input v-model="form.packSpec" class="field" placeholder="如 0.25g×24粒/盒、100ml/瓶" />
                 </label>
                 <label class="me__field">
-                  <span class="me__label">每盒含</span>
+                  <span class="me__label">每盒含 <em>*</em></span>
                   <div class="me__perpack">
                     <input
                       v-model.number="form.perPack"

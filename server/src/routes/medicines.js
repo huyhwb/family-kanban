@@ -313,8 +313,8 @@ router.post('/', (req, res) => {
   const body = req.body || {}
   const name = text(body.name, 80)
   if (!name) return res.status(400).json({ error: '药品名不能为空' })
-  if (!text(body.packSpec ?? body.spec, 60)) {
-    return res.status(400).json({ error: '每盒（瓶/罐）的规格不能为空' })
+  if (Math.max(0, num(body.perPack)) <= 0) {
+    return res.status(400).json({ error: '请填写每盒含多少个小袋/片/毫升' })
   }
 
   const id = uid()
@@ -384,7 +384,9 @@ router.patch('/:id', (req, res) => {
     note: body.note !== undefined ? text(body.note, 500) : row.note
   }
   if (!next.name) return res.status(400).json({ error: '药品名不能为空' })
-  if (!next.pack_spec) return res.status(400).json({ error: '每盒（瓶/罐）的规格不能为空' })
+  if (Math.max(0, num(body.perPack !== undefined ? body.perPack : row.per_pack)) <= 0) {
+    return res.status(400).json({ error: '请填写每盒含多少个小袋/片/毫升' })
+  }
 
   db.prepare(
     `UPDATE medicine
