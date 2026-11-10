@@ -39,8 +39,46 @@ function autoEnabled() {
   return String(getSettings()['calendar.autoHoliday'] ?? '1') !== '0'
 }
 
-/** 拉取某一年并转成 { off: {date: name}, work: [date] } */
-async function fetchYear(year) {
+/** 数据源一：holiday-cn，按国务院通知维护，更新最快。优先走 jsDelivr（国内可直连） */
+const HOLIDAY_CN_URLS = [
+  (y) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${y}.json`,
+  (y) => `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${y}.json`
+]
+
+async function fetchFromHolidayCn(year) {
+  const errors = []
+  for (const make of HOLIDAY_CN_URLS) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 12000)
+    try {
+      const resp = await fetch(make(year), {
+        headers: { 'User-Agent': 'family-kanban/holiday-sync' },
+        signal: controller.signal
+      })
+      if (resp.status === 404) throw new Error('该年份暂无数据')
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const data = await resp.json()
+      const days = Array.isArray(data.days) ? data.days : []
+      const off = {}
+      const work = []
+      for (const d of days) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date || '')) continue
+        if (d.isOffDay) off[d.date] = d.name || '放假'
+        else work.push(d.date)
+      }
+      if (!Object.keys(off).length) throw new Error('该年份暂无数据')
+      return { year, off, work, source: 'holiday-cn' }
+    } catch (err) {
+      errors.push(err.message)
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw new Error(errors.join(' / '))
+}
+
+/** 数据源二：timor.tech（holiday-cn 拉不到时的兜底） */
+async function fetchFromTimor(year) {
   const url = `https://timor.tech/api/holiday/year/${year}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 12000)
@@ -61,19 +99,31 @@ async function fetchYear(year) {
       if (item.holiday) off[date] = item.name || '放假'
       else work.push(date)
     }
-    // 该年一点数据都没有，当作失败，避免把已有的全年数据覆盖成空
     if (!Object.keys(off).length) throw new Error('该年份暂无数据')
-    return { year, off, work }
+    return { year, off, work, source: 'timor.tech' }
   } finally {
     clearTimeout(timer)
   }
 }
 
-function saveYear({ year, off, work }) {
+/** 依次尝试两个数据源 */
+async function fetchYear(year) {
+  const errors = []
+  for (const fn of [fetchFromHolidayCn, fetchFromTimor]) {
+    try {
+      return await fn(year)
+    } catch (err) {
+      errors.push(err.message)
+    }
+  }
+  throw new Error(errors.join(' / '))
+}
+
+function saveYear({ year, off, work, source }) {
   const payload = JSON.stringify({
     off,
     work,
-    source: `timor.tech 自动更新 ${dayjs().format('YYYY-MM-DD HH:mm')}`
+    source: `${source || '自动'} 自动更新 ${dayjs().format('YYYY-MM-DD HH:mm')}`
   })
   setSetting(`holiday.custom.${year}`, payload)
 }

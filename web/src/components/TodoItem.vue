@@ -360,26 +360,9 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   color: var(--text-3);
 }
 
-.todo--done .todo__pill {
-  display: inline-block;
-  margin-right: 0.3rem;
-  padding: 0 0.28rem;
-  border-radius: 4px;
-  font-size: 0.62rem;
-  font-weight: 600;
-  color: var(--purple);
-  background: var(--purple-weak);
-  vertical-align: 1px;
-}
-
-.todo__tag--dose {
-  color: var(--purple);
-  background: var(--purple-weak);
-}
-
-.todo__title {
+/* 已完成的标题只变灰，不加删除线 */
+.todo--done .todo__title {
   color: var(--text-3);
-  text-decoration: line-through;
 }
 
 .todo__meta {
